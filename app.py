@@ -215,7 +215,7 @@ def parse_refinement_output(refinement_output):
 # STREAMLIT UI
 ########################################
 
-st.title("Alignment Research Automator")
+st.title("Alignment Ideation Automator")
 
 model_choice = st.selectbox("Select LLM Model:", ["gpt-4o", "o1-mini", "o1-preview"])
 verbose = st.checkbox("Show verbose debug info")
