@@ -4,183 +4,226 @@ from openai import OpenAI
 # Replace 'key' with your actual OpenAI API key.
 client = OpenAI(api_key=st.secrets['API_KEY'])
 
-def run_completion(messages):
+########################################
+# HELPER FUNCTIONS
+########################################
+
+def run_completion(messages, model, verbose=False):
+    if verbose:
+        st.write("**Requesting Model:**", model)
+        st.write("**Messages:**", messages)
     completion = client.chat.completions.create(
-        model="gpt-4o-2024-08-06",
+        model=model,
         messages=messages
     )
-    return completion.choices[0].message.content
+    response = completion.choices[0].message.content
+    if verbose:
+        st.write("**Response:**", response)
+    return response
 
 ########################################
 # PROMPT TEMPLATES
 ########################################
 
-# System prompt for Summarization stage
-SUMMARIZER_SYSTEM = """You are a research assistant specializing in analyzing scholarly text and identifying potential AI alignment implications.
-Your goals:
-1. Ingest the provided research text (like a paper abstract or section).
-2. Extract key findings, core concepts, and any methods or hypotheses relevant to advanced AI.
-3. Identify potential links or implications for AI alignment, control, safety, or interpretability.
-4. Provide a structured summary focusing on aspects that could be further developed into alignment research directions.
+SUMMARIZER_SYSTEM = """You are a specialized research assistant focused on analyzing scholarly research text and identifying AI alignment implications.
+You must provide a *comprehensive, systematic overview* of the given research text, including:
+- The problem domain, key hypotheses, and methods described.
+- The core findings or theoretical contributions, including any experimental details if provided.
+- Relevance to AI alignment: potential links to alignment problems, interpretability, safety, robustness, or analogous scenarios in the paper’s domain.
+- Highlight specific angles or considerations if additional user-provided contexts are given.
 
-You are meticulous, concise, and strive to present information faithfully without hallucination.
-If information is not present, be clear about that. If you speculate, label it as speculation.
+Your output should be factual, structured, and thorough. If you speculate, label it as speculation. Avoid vague language. Make this overview as complete and explicit as possible, given the input text.
 """
 
-SUMMARIZER_USER = """Summarize the following research text and highlight aspects that could inform or inspire new AI alignment research directions.
+SUMMARIZER_USER = """Below is a research text. Provide a comprehensive, systematic overview of its contents and highlight potential AI alignment implications.
 
-Text:
+Research Text:
 {user_text}
+
+Additional Angles to Consider (if any):
+{additional_context}
 """
 
-# System prompt for Ideation/Refinement stage
-# This prompt guides the LLM to:
-# - Consider the summary and generate novel alignment ideas.
-# - Critique and refine them upon request.
 IDEATOR_SYSTEM = """You are an AI alignment research ideation agent.
-Your role:
-1. Given a structured summary of a research paper, propose several innovative and potentially neglected approaches or directions that advance AI alignment.
-2. Think creatively but remain grounded in scientific plausibility. Incorporate relevant alignment concepts like interpretability, corrigibility, safe exploration, etc.
-3. When asked to refine, first critique the ideas you produced, identify weaknesses, then improve them. Make them more concrete, feasible, and scientifically grounded.
-4. Be aware of repetitive patterns or “basins” of thought. If you find yourself circling the same concepts, consciously try a radically different angle or analogy to break free.
-5. Always maintain a scholarly tone and cite known alignment concepts or research directions where possible (even if at a high level).
+Your goals:
+1. Given the systematic overview, propose multiple innovative, forward-looking AI alignment research directions derived from the paper’s content.
+2. Emphasize novelty, scientific feasibility, and impact on alignment (e.g. interpretability, corrigibility, safe exploration).
+3. Incorporate any additional user-provided angles into your ideation.
+4. When asked to refine, you will produce a critique and then improved versions of the ideas in a structured, parseable format.
 
-Your output should be structured and clear, and after critique, provide improved versions that address identified shortcomings.
+IMPORTANT: When refining, output in a predictable format:
+
+CRITIQUE_START [Your critique here] CRITIQUE_END
+
+IMPROVED_START [Your improved ideas here, stand-alone and well-structured] IMPROVED_END
+
+
+If ideas seem repetitive or stuck, try introducing a fresh perspective or analogy.
 """
 
-IDEATOR_IDEATION_USER = """Below is the summary of the research text. Based on this summary, propose several original and forward-looking AI alignment research directions. Focus on novelty, feasibility, and potential for significant impact.
+IDEATOR_IDEATION_USER = """Below is the systematic overview of the research text. Using this overview and any additional angles, propose several original AI alignment research directions.
 
-Summary:
-{summary}
+Systematic Overview:
+{overview}
+
+Additional Angles:
+{additional_context}
 """
 
-IDEATOR_REFINE_USER = """Here are the current alignment ideas you produced:
+IDEATOR_REFINE_USER = """Below are the current alignment ideas. First, critique them clearly. Then rewrite improved ideas in the specified parseable format.
 
+Current Ideas:
 {ideas}
 
-Step 1: Critique these ideas. Identify their weaknesses, gaps, or unrealistic assumptions.
-Step 2: After critiquing them, rewrite or refine these ideas to be more robust, implementable, and well-grounded in known alignment literature or methodologies.
-If you notice repetitive patterns, try introducing a fresh perspective or approach from a different domain.
+Remember:
+- Use the CRITIQUE_START/END and IMPROVED_START/END markers.
+- Make improved ideas standalone, clear, and grounded. If repetitive, introduce a fresh angle.
 """
 
-# System prompt for Termination Check
-TERMINATION_SYSTEM = """You are an evaluator judging the quality of proposed alignment research directions.
-Your role:
-1. Assess whether the final set of ideas is sufficiently novel, clear, and feasible.
-2. If these ideas meet a reasonable threshold for alignment research quality (e.g., they offer at least one new angle, are not obviously repetitive, and have some actionable element), respond with "Good enough".
-3. If they are still vague, repetitive, or unconvincing, respond with "Needs more iteration".
-4. Do not provide explanations beyond these statements. Just choose one response.
+TERMINATION_SYSTEM = """You are an evaluator of alignment research directions.
+1. Assess if the final improved set of ideas is novel, clear, and feasible.
+2. If good, respond with "Good enough".
+3. If still vague or repetitive, respond with "Needs more iteration".
+4. Respond with one of these strings only, no explanation.
 """
 
-TERMINATION_USER = """Evaluate these refined alignment ideas and determine if they are "Good enough" or "Needs more iteration":
+TERMINATION_USER = """Evaluate these improved alignment ideas:
 
+{refined_ideas}
+
+Are they "Good enough" or "Needs more iteration"?
+"""
+
+DIFFERENT_ANGLE_SYSTEM = """You are a resourceful alignment ideation assistant who must break out of previous patterns.
+If prompted, produce a fundamentally different set of approaches that avoid previous repetitive angles, possibly drawing analogies from unrelated disciplines, new theoretical lenses, or untested frameworks.
+"""
+
+DIFFERENT_ANGLE_USER = """Current ideas seem repetitive. Provide a fundamentally different set of alignment directions. Aim for genuine novelty and break from earlier patterns.
+
+Previous Refined Ideas:
 {refined_ideas}
 """
 
-# A helper for a different angle attempt if stuck
-DIFFERENT_ANGLE_SYSTEM = """You are a resourceful alignment ideation assistant trying to break out of repetitive patterns.
-If asked, you will propose a fundamentally different set of approaches, leveraging analogies from unrelated fields, new theoretical frameworks, or fresh metrics, to breathe new life into the alignment directions.
-"""
+########################################
+# WORKFLOW FUNCTIONS
+########################################
 
-DIFFERENT_ANGLE_USER = """Current refined ideas seem repetitive or stuck. Provide a fundamentally different set of alignment directions, potentially inspired by fields or analogies not previously considered. Aim for genuine novelty and break from earlier patterns.
+def summarize_text(user_text, additional_context, model, verbose):
+    messages = [
+        {"role": "system", "content": SUMMARIZER_SYSTEM},
+        {"role": "user", "content": SUMMARIZER_USER.format(user_text=user_text, additional_context=additional_context)}
+    ]
+    return run_completion(messages, model, verbose=verbose)
 
-Current ideas:
-{refined_ideas}
-"""
+def generate_ideas(overview, additional_context, model, verbose):
+    messages = [
+        {"role": "system", "content": IDEATOR_SYSTEM},
+        {"role": "user", "content": IDEATOR_IDEATION_USER.format(overview=overview, additional_context=additional_context)}
+    ]
+    return run_completion(messages, model, verbose=verbose)
+
+def refine_ideas(ideas, model, verbose):
+    messages = [
+        {"role": "system", "content": IDEATOR_SYSTEM},
+        {"role": "user", "content": IDEATOR_REFINE_USER.format(ideas=ideas)}
+    ]
+    return run_completion(messages, model, verbose=verbose)
+
+def check_termination(refined_ideas, model, verbose):
+    messages = [
+        {"role": "system", "content": TERMINATION_SYSTEM},
+        {"role": "user", "content": TERMINATION_USER.format(refined_ideas=refined_ideas)}
+    ]
+    return run_completion(messages, model, verbose=verbose)
+
+def try_different_angle(refined_ideas, model, verbose):
+    messages = [
+        {"role": "system", "content": DIFFERENT_ANGLE_SYSTEM},
+        {"role": "user", "content": DIFFERENT_ANGLE_USER.format(refined_ideas=refined_ideas)}
+    ]
+    return run_completion(messages, model, verbose=verbose)
 
 ########################################
 # STREAMLIT UI
 ########################################
 
-st.title("Alignment Research Automator (MVP)")
+st.title("Alignment Research Automator (Enhanced MVP)")
 
-if 'summary' not in st.session_state:
-    st.session_state.summary = None
+model_choice = st.selectbox("Select LLM Model:", ["gpt-4o", "o1-mini", "o1-preview"])
+user_text = st.text_area("Paste your research text (abstract or section):", height=300)
+additional_context = st.text_area("Optional additional angles or considerations:", height=100)
+verbose = st.checkbox("Show verbose debug info")
 
-if 'ideas' not in st.session_state:
-    st.session_state.ideas = None
+max_iterations = 3  # max refinement iterations before trying different angle
 
-if 'refined_ideas' not in st.session_state:
-    st.session_state.refined_ideas = None
-
-if 'iteration_count' not in st.session_state:
-    st.session_state.iteration_count = 0
-
-user_text = st.text_area("Paste your research text here (e.g., abstract or section of a paper):", height=300)
-
-if st.button("Summarize & Extract Alignment Angles"):
-    if user_text.strip():
-        messages = [
-            {"role": "system", "content": SUMMARIZER_SYSTEM},
-            {"role": "user", "content": SUMMARIZER_USER.format(user_text=user_text)}
-        ]
-        summary = run_completion(messages)
-        st.session_state.summary = summary
-        st.session_state.ideas = None
-        st.session_state.refined_ideas = None
-        st.session_state.iteration_count = 0
-        st.success("Summary generated!")
+if st.button("Run Pipeline"):
+    if not user_text.strip():
+        st.warning("Please provide some text before running the pipeline.")
     else:
-        st.warning("Please provide some text before summarizing.")
+        # Step 1: Summarize/Overview
+        overview = summarize_text(user_text, additional_context, model_choice, verbose)
+        st.subheader("Comprehensive Systematic Overview")
+        st.write(overview)
 
-if st.session_state.summary:
-    st.subheader("Summary & Initial Context")
-    st.write(st.session_state.summary)
+        # Step 2: Initial Ideas
+        ideas = generate_ideas(overview, additional_context, model_choice, verbose)
+        st.subheader("Initial Alignment Ideas")
+        st.write(ideas)
 
-    if st.button("Generate Alignment Ideas"):
-        ideation_messages = [
-            {"role": "system", "content": IDEATOR_SYSTEM},
-            {"role": "user", "content": IDEATOR_IDEATION_USER.format(summary=st.session_state.summary)}
-        ]
-        ideas = run_completion(ideation_messages)
-        st.session_state.ideas = ideas
-        st.session_state.refined_ideas = None
-        st.session_state.iteration_count = 0
-        st.success("Initial alignment ideas generated!")
+        refined_ideas = ideas
+        iteration_count = 0
 
-if st.session_state.ideas:
-    st.subheader("Initial Ideas")
-    st.write(st.session_state.ideas)
+        # Step 3: Refinement loop with termination checks
+        while iteration_count < max_iterations:
+            # Refine ideas
+            refinement_output = refine_ideas(refined_ideas, model_choice, verbose)
 
-    if st.button("Refine Ideas"):
-        refine_messages = [
-            {"role": "system", "content": IDEATOR_SYSTEM},
-            {"role": "user", "content": IDEATOR_REFINE_USER.format(ideas=st.session_state.refined_ideas if st.session_state.refined_ideas else st.session_state.ideas)}
-        ]
-        refined = run_completion(refine_messages)
-        st.session_state.refined_ideas = refined
-        st.session_state.iteration_count += 1
-        st.success("Ideas refined and improved!")
+            # Parse refinement output:
+            # Expecting:
+            # CRITIQUE_START ... CRITIQUE_END
+            # IMPROVED_START ... IMPROVED_END
+            critique_start = refinement_output.find("CRITIQUE_START")
+            critique_end = refinement_output.find("CRITIQUE_END")
+            improved_start = refinement_output.find("IMPROVED_START")
+            improved_end = refinement_output.find("IMPROVED_END")
 
-if st.session_state.refined_ideas:
-    st.subheader("Refined Ideas")
-    st.write(st.session_state.refined_ideas)
+            if critique_start == -1 or critique_end == -1 or improved_start == -1 or improved_end == -1:
+                # If parsing fails, just treat everything as improved ideas
+                # (fallback scenario)
+                final_refined_ideas = refinement_output.strip()
+                critique_section = "Could not parse critique."
+            else:
+                critique_section = refinement_output[critique_start+len("CRITIQUE_START"):critique_end].strip()
+                final_refined_ideas = refinement_output[improved_start+len("IMPROVED_START"):improved_end].strip()
 
-    if st.button("Check if Good Enough"):
-        termination_messages = [
-            {"role": "system", "content": TERMINATION_SYSTEM},
-            {"role": "user", "content": TERMINATION_USER.format(refined_ideas=st.session_state.refined_ideas)}
-        ]
-        verdict = run_completion(termination_messages)
-        st.write("Termination Check:", verdict)
+            st.subheader(f"Iteration {iteration_count+1} Critique")
+            st.write(critique_section)
+            st.subheader(f"Iteration {iteration_count+1} Refined Ideas")
+            st.write(final_refined_ideas)
 
-        if "Needs more iteration" in verdict:
-            st.info("The evaluator suggests more refinement. Consider refining again or trying a different angle.")
-            if st.session_state.iteration_count >= 2:
-                st.warning("Ideas may be stuck in a repetitive pattern. Try a different angle.")
-        else:
-            st.success("The ideas seem good enough!")
+            # Check termination
+            verdict = check_termination(final_refined_ideas, model_choice, verbose)
+            st.write("Termination Check:", verdict)
 
-    # Give the option to refine again if needed
-    if st.session_state.iteration_count >= 1:
-        if st.button("Try a Different Angle"):
-            angle_messages = [
-                {"role": "system", "content": DIFFERENT_ANGLE_SYSTEM},
-                {"role": "user", "content": DIFFERENT_ANGLE_USER.format(refined_ideas=st.session_state.refined_ideas)}
-            ]
-            diff_angle_ideas = run_completion(angle_messages)
-            st.session_state.refined_ideas = diff_angle_ideas
-            st.success("Proposed a fundamentally different angle!")
+            if "Good enough" in verdict:
+                st.success("The ideas are considered good enough!")
+                break
+            else:
+                # Needs more iteration
+                iteration_count += 1
+                refined_ideas = final_refined_ideas
 
-st.write("---")
-st.write("This MVP attempts a more role- and context-rich approach to AI alignment ideation from research text. Adjust prompts, iterate, and improve as needed.")
+        # If max iterations reached and still not good enough, try different angle
+        if iteration_count == max_iterations and "Needs more iteration" in verdict:
+            st.warning("Ideas still not good enough after multiple refinements. Attempting a different angle...")
+            diff_ideas = try_different_angle(refined_ideas, model_choice, verbose)
+            st.subheader("Different Angle Ideas")
+            st.write(diff_ideas)
+
+            # Final termination check after different angle attempt
+            diff_verdict = check_termination(diff_ideas, model_choice, verbose)
+            st.write("Final Termination Check After Different Angle:", diff_verdict)
+            if "Good enough" in diff_verdict:
+                st.success("The different angle produced good enough ideas!")
+            else:
+                st.info("Even after a different angle, more iteration might be needed. Consider revising input or approach.")
