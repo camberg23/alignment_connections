@@ -2,14 +2,32 @@ import streamlit as st
 from openai import OpenAI
 import re
 
-# Replace 'key' with your actual OpenAI API key.
+# Initialize OpenAI client with Streamlit secrets
 client = OpenAI(api_key=st.secrets['API_KEY'])
 
 ########################################
 # HELPER FUNCTIONS
 ########################################
 
+def adjust_messages_for_model(messages, model):
+    # For O1 models, system messages are not supported.
+    # Convert system messages to user messages.
+    if model in ["o1-mini", "o1-preview"]:
+        adjusted = []
+        for msg in messages:
+            if msg["role"] == "system":
+                # Prepend some clear indicator that these were system instructions
+                content = "INSTRUCTIONS:\n" + msg["content"]
+                adjusted.append({"role": "user", "content": content})
+            else:
+                adjusted.append(msg)
+        return adjusted
+    else:
+        # For gpt-4o, we can keep system messages as-is
+        return messages
+
 def run_completion(messages, model, verbose=False):
+    messages = adjust_messages_for_model(messages, model)
     if verbose:
         st.write("**Requesting Model:**", model)
         st.write("**Messages:**", messages)
@@ -112,8 +130,8 @@ Previous Refined Ideas:
 ACCOMMODATE_FEEDBACK_SYSTEM = """You are an AI alignment ideation agent.
 You have received improved ideas and a critique from the termination checker that says they are not good enough. Your role:
 1. Review the provided ideas and the termination checker's critique.
-2. Reason about how to accommodate the critique to improve the ideas further. (This reasoning should appear inside `CRITIQUE_START` and `CRITIQUE_END`.)
-3. After that reasoning, produce improved ideas that address the critique, focusing on the best subset and adding new details or angles if needed. (This should appear inside `IMPROVED_START` and `IMPROVED_END`.)
+2. Reason about how to accommodate the critique to improve the ideas further. (This reasoning should appear inside CRITIQUE_START and CRITIQUE_END.)
+3. After that reasoning, produce improved ideas addressing it, focusing on the best subset and adding new details or angles if needed. (This should appear inside IMPROVED_START and IMPROVED_END.)
 
 Use the same formatting rules for critique and improved ideas.
 """
@@ -202,7 +220,6 @@ st.title("Alignment Research Automator")
 model_choice = st.selectbox("Select LLM Model:", ["gpt-4o", "o1-mini", "o1-preview"])
 verbose = st.checkbox("Show verbose debug info")
 
-# User-defined parameters with defaults
 max_iterations = st.number_input("Max Refinement Iterations:", min_value=1, value=3)
 enable_different_angle = st.checkbox("Attempt Different Angle if stuck?", value=True)
 
@@ -243,9 +260,9 @@ if st.button("Run Pipeline"):
 
             if verdict.startswith("Good enough"):
                 final_good_enough = True
+                refined_ideas = final_refined_ideas
                 break
             else:
-                # Needs more iteration
                 # Extract reason if "Needs more iteration"
                 reason_match = re.match(r"Needs more iteration:\s*(.*)", verdict)
                 if reason_match:
@@ -253,9 +270,8 @@ if st.button("Run Pipeline"):
                 else:
                     termination_reason = "No specific feedback provided."
 
-                # Now accommodate feedback directly
+                # Now accommodate feedback
                 feedback_output = accommodate_feedback(final_refined_ideas, termination_reason, model_choice, verbose)
-                # Parse again after accommodating feedback
                 fb_critique_section, fb_final_ideas = parse_refinement_output(feedback_output)
 
                 with st.expander(f"Accommodating Feedback after Iteration {iteration_count+1}"):
@@ -288,10 +304,10 @@ if st.button("Run Pipeline"):
             st.write("Final Termination Check After Different Angle:", diff_verdict)
             if diff_verdict.startswith("Good enough"):
                 final_good_enough = True
-                final_refined_ideas = diff_ideas
+                refined_ideas = diff_ideas
             else:
                 st.info("Even after a different angle, more iteration might be needed. Consider revising input or approach.")
 
         if final_good_enough:
             with st.expander("Final Accepted Ideas", expanded=True):
-                st.write(final_refined_ideas)
+                st.write(refined_ideas)
