@@ -121,6 +121,7 @@ def run_completion(messages, model, verbose=False):
         # Use `max_tokens_to_sample` and specify a valid Anthropic model name
         response = anthropic_client.completions.create(
             model="claude-3-5-sonnet-20241022",  # For example, pick a valid Claude model name
+            max_tokens_to_sample=1000,
             prompt=prompt,
             temperature=1
         )
