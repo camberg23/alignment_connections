@@ -36,54 +36,6 @@ def adjust_messages_for_o1(messages):
             adjusted.append(msg)
     return adjusted
 
-def convert_messages_for_anthropic(messages):
-    # Anthropics expects a single prompt string. We'll follow a simple heuristic:
-    # - Combine all system & user as human, assistant as assistant.
-    # - For system messages, we'll prepend instructions at the start of the conversation.
-    # We assume system and user are effectively from the human side, assistant from the assistant side.
-    # We'll form a conversation string: 
-    # Human: {system_msg + user_msg}, Assistant: {assistant_msg}, etc.
-    
-    # We'll accumulate all instructions and user content into one human turn at the start.
-    system_instructions = []
-    conversation = []
-    human_turn = ""
-    
-    for msg in messages:
-        if msg["role"] == "system":
-            system_instructions.append(msg["content"])
-        elif msg["role"] == "user":
-            # Each user message is a human turn. If we have system instructions, prepend once at the start.
-            # We'll just combine all system instructions into the first human turn.
-            if system_instructions:
-                human_turn += "\n".join(system_instructions) + "\n"
-                system_instructions = []
-            human_turn += msg["content"]
-            conversation.append((human_turn, "human"))
-            human_turn = ""
-        elif msg["role"] == "assistant":
-            # Assistant turn
-            conversation.append((msg["content"], "assistant"))
-    
-    # If there were system instructions left with no user turn afterward, put them as a last human turn
-    # (though typically we'd always have a user message after system)
-    if system_instructions:
-        conversation.insert(0, ("\n".join(system_instructions), "human"))
-        
-    # Construct the full prompt
-    # Anthropics format: HUMAN_PROMPT = "<|HUMAN|>" AI_PROMPT="<|ASSISTANT|>" 
-    # We'll use anthropic.HUMAN_PROMPT and anthropic.AI_PROMPT
-    full_prompt = ""
-    # We alternate between human and assistant. The first message should be human (if any)
-    for (content, role) in conversation:
-        if role == "human":
-            full_prompt += f"{anthropic.HUMAN_PROMPT} {content}"
-        else:
-            full_prompt += f"{anthropic.AI_PROMPT} {content}"
-    # End with an AI_PROMPT to get assistant completion
-    full_prompt += anthropic.AI_PROMPT
-    return full_prompt
-
 def run_completion(messages, model, verbose=False):
     # Handle model type and transform messages as needed
     if is_o1_model(model):
@@ -114,7 +66,6 @@ def run_completion(messages, model, verbose=False):
             st.write("**Response:**", response)
         return response
     elif is_anthropic_model(model):
-        prompt = convert_messages_for_anthropic(messages)
         if verbose:
             st.write("**Using Anthropic Model:**", model)
             st.write("**Prompt:**", prompt)
@@ -123,7 +74,8 @@ def run_completion(messages, model, verbose=False):
             model="claude-3-5-sonnet-20241022",  # For example, pick a valid Claude model name
             max_tokens_to_sample=1000,
             prompt=prompt,
-            temperature=1
+            temperature=1,
+            messages=messages
         )
         if verbose:
             st.write("**Response:**", response['completion'])
