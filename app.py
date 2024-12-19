@@ -68,18 +68,26 @@ def run_completion(messages, model, verbose=False):
     elif is_anthropic_model(model):
         if verbose:
             st.write("**Using Anthropic Model:**", model)
-            st.write("**Prompt:**", messages)
-        # Use `max_tokens_to_sample` and specify a valid Anthropic model name
-        response = anthropic_client.messages.create(
-            model="claude-3-5-sonnet-20241022",  # For example, pick a valid Claude model name
-            max_tokens=1000,
-            messages=messages
-        )
-        response = completion.choices[0].message.content
-        if verbose:
-            st.write("**Response:**", response['completion'])
-    return response.strip()
+            st.write("**Messages:**", messages)
+        # Extract system messages and pass via `system` parameter, remove them from messages
+        system_str_list = [m["content"] for m in messages if m["role"] == "system"]
+        user_assistant_msgs = [m for m in messages if m["role"] != "system"]
+        system_str = "\n".join(system_str_list) if system_str_list else None
 
+        kwargs = {
+            "model": "claude-3-5-sonnet-20241022",  # Example model name
+            "max_tokens": 1000,
+            "messages": user_assistant_msgs
+        }
+        if system_str:
+            kwargs["system"] = system_str
+
+        response = anthropic_client.messages.create(**kwargs)
+        # Extract the assistant message content
+        response = response["messages"][-1]["content"]
+        if verbose:
+            st.write("**Response:**", response)
+        return response.strip()
 
 ########################################
 # PROMPTS
@@ -175,7 +183,6 @@ TERMINATOR_USER = """Evaluate these improved alignment directions:
 Are they good enough or need more iteration?
 """
 
-# If after N iterations still not good enough, ask terminator for strengths & weaknesses.
 TERMINATOR_ASSESS_SYSTEM = """You are an evaluator.
 Given the final alignment directions, provide a strengths and weaknesses assessment since they were not approved after multiple iterations. Be factual and concise.
 """
@@ -265,7 +272,6 @@ verbose = st.checkbox("Show verbose debug info")
 
 max_iterations = st.number_input("Max Refinement Iterations:", min_value=1, value=3)
 enable_different_angle = st.checkbox("Attempt Different Angle if stuck?", value=False)
-# Note: Different angle step not clearly requested now. The instructions no longer mention different angle step in final architecture. We can remove it or keep it disabled by default.
 
 user_text = st.text_area("Paste your research text (abstract or section):", height=300)
 additional_context = st.text_area("Optional additional angles or considerations:", height=100)
@@ -311,19 +317,12 @@ if st.button("Run Pipeline"):
                 current_ideas = improved_ideas
                 break
             else:
-                # Not good enough, extract reason and iterate again
                 reason_match = re.match(r"Needs more iteration:\s*(.*)", verdict)
                 if reason_match:
                     termination_reason = reason_match.group(1).strip()
                 else:
                     termination_reason = "No specific feedback provided."
 
-                # Incorporate termination feedback as well?
-                # The instructions say we show not looping in circles:
-                # Actually, the instructions said we feed first rejection criteria on next iteration. 
-                # We'll just continue the loop. The next iteration will produce new critique and new re-ideation from scratch anyway.
-
-                # Set current_ideas to improved_ideas for the next iteration
                 current_ideas = improved_ideas
                 iteration_count += 1
 
