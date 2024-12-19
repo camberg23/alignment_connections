@@ -102,7 +102,7 @@ Provide a comprehensive, systematic overview:
 Be factual, thorough, no vague language.
 """
 
-SUMMARIZER_USER = """Below is a research text. Provide the comprehensive overview as requested above.
+SUMMARIZER_USER = """Below is a research text. Provide the comprehensive overview as requested above. It should be extremely substantive and should serve as a functional stand-in for someone reading the paper. Leave out none of the 'meat.'
 
 Research Text:
 {user_text}
