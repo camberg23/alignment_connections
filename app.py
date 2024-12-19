@@ -84,7 +84,7 @@ def run_completion(messages, model, verbose=False):
 
         response = anthropic_client.messages.create(**kwargs)
         # Extract the assistant message content
-        response = response.choices[0].message.content
+        response = response.content[0].text
         if verbose:
             st.write("**Response:**", response)
         return response.strip()
