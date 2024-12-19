@@ -285,7 +285,7 @@ def chat_interface(key, base_content, model, verbose):
             conv_messages.append(m)
         response = run_completion(conv_messages, model, verbose)
         st.session_state.conversation_states[key].append({"role":"assistant","content":response})
-        st.experimental_rerun()
+        st.rerun()
 
 def download_expander_content(label, content):
     return st.download_button(
@@ -376,7 +376,7 @@ if run_pipeline:
         st.session_state.pipeline_results["additional_context"] = additional_context
 
         st.session_state.pipeline_ran = True
-        st.experimental_rerun()
+        st.rerun()
 
 if st.session_state.pipeline_ran:
     # Display results from session_state
