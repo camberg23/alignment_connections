@@ -10,7 +10,7 @@ st.write("You can choose different LLMs for each stage (Summarizer, Ideator, Cri
 
 # Secrets
 openai_client = OpenAI(api_key=st.secrets['API_KEY'])
-anthropic_client = anthropic.Client(api_key=st.secrets['ANTHROPIC_API_KEY'])
+anthropic_client = anthropic.Anthropic(api_key=st.secrets['ANTHROPIC_API_KEY'])
 
 ########################################
 # MODEL HANDLING
@@ -114,24 +114,20 @@ def run_completion(messages, model, verbose=False):
             st.write("**Response:**", response)
         return response
     elif is_anthropic_model(model):
-        # Convert messages to a single prompt
         prompt = convert_messages_for_anthropic(messages)
         if verbose:
             st.write("**Using Anthropic Model:**", model)
             st.write("**Prompt:**", prompt)
-        max_tokens = 600
+        # Use `max_tokens_to_sample` and specify a valid Anthropic model name
         response = anthropic_client.completions.create(
-            model="claude-v1", # or parse model name if needed, here we assume anthropic:claude means claude-v1
-            max_tokens=max_tokens,
+            model="claude-3-5-sonnet-20241022",  # For example, pick a valid Claude model name
             prompt=prompt,
-            stop=None,
             temperature=1
         )
         if verbose:
-            st.write("**Response:**", response.completion)
-        return response.completion.strip()
-    else:
-        raise ValueError("Unknown model type")
+            st.write("**Response:**", response['completion'])
+        return response['completion'].strip()
+
 
 ########################################
 # PROMPTS
