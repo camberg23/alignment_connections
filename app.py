@@ -11,7 +11,7 @@ st.write("This tool takes a research text, summarizes it, proposes alignment res
 st.write("You can choose different LLMs for each stage (Summarizer, Ideator, Critic, Terminator) and run multiple iterations. If after N iterations it still isn't good enough, final output and a strengths/weaknesses assessment is displayed.")
 st.write("You can upload a PDF or paste text. If both are provided, PDF content takes precedence.")
 st.write("Within each expander, you can chat with an LLM to further explore the displayed content. You can also download the contents of the expander as markdown.")
-st.write("**New**: Choose 'Manual Mode' to manually intervene at each step in the pipeline, or leave it off for an automatic run. Manual mode allows repeated back-and-forth with the model during each step before proceeding to the next step. No pipeline state is lost when you do this step-by-step process.")
+st.write("**New**: Choose 'Manual Mode' to manually intervene at each step in the pipeline. You can go back and forth with each step before proceeding. When you press 'Proceed', the next step will automatically run, incorporating the entire conversation from the current step into the next step's prompt. Previous-step conversations remain available in collapsible sections with download buttons.")
 
 # Ensure session state keys exist
 if "pipeline_ran" not in st.session_state:
@@ -24,6 +24,8 @@ if "manual_current_step" not in st.session_state:
     st.session_state.manual_current_step = 0
 if "manual_mode" not in st.session_state:
     st.session_state.manual_mode = False
+if "final_input_text" not in st.session_state:
+    st.session_state.final_input_text = ""
 
 # Secrets
 openai_client = OpenAI(api_key=st.secrets['API_KEY'])
@@ -262,7 +264,7 @@ def parse_refinement_output(refinement_output):
     return critique_section, final_refined_ideas
 
 ########################################
-# CHAT WITHIN EXPANDER
+# CHAT AND UTILS
 ########################################
 
 def ensure_conversation_state(key):
@@ -270,8 +272,12 @@ def ensure_conversation_state(key):
         st.session_state.conversation_states[key] = []
 
 def chat_interface(key, base_content, model, verbose):
+    """
+    Displays a chat interface for the given 'key' with the base_content.
+    The entire conversation is stored in st.session_state.conversation_states[key].
+    """
     ensure_conversation_state(key)
-    # Display existing chat messages
+    # Show existing chat messages
     for msg in st.session_state.conversation_states[key]:
         if msg["role"] == "user":
             with st.chat_message("user"):
@@ -280,14 +286,23 @@ def chat_interface(key, base_content, model, verbose):
             with st.chat_message("assistant"):
                 st.write(msg["content"])
 
+    # New user input
     prompt = st.chat_input("Ask a question or refine this content further", key=f"chat_input_{key}")
     if prompt:
-        # User message
         st.session_state.conversation_states[key].append({"role":"user","content":prompt})
-        # Call LLM with base_content + conversation
-        conv_messages = [{"role":"system","content":"You are a helpful assistant. You have the following content:\n\n" + base_content + "\n\nUser and assistant messages follow. Answer user queries helpfully."}]
+        # We'll pass the entire conversation to the model as context, plus the base_content
+        # so it knows what it's referencing
+        conv_messages = [
+            {
+                "role":"system",
+                "content":"You are a helpful assistant. You have the following content:\n\n" 
+                          + base_content 
+                          + "\n\nUser and assistant messages follow. Answer user queries helpfully."
+            }
+        ]
         for m in st.session_state.conversation_states[key]:
             conv_messages.append(m)
+
         response = run_completion(conv_messages, model, verbose)
         st.session_state.conversation_states[key].append({"role":"assistant","content":response})
         st.rerun()
@@ -299,6 +314,16 @@ def download_expander_content(label, content):
         file_name=f"{label.replace(' ','_')}.md",
         mime="text/markdown",
     )
+
+def get_conversation_transcript(key):
+    """Combine all user/assistant messages into a single text block."""
+    ensure_conversation_state(key)
+    lines = []
+    for m in st.session_state.conversation_states[key]:
+        role = m["role"].upper()
+        text = m["content"]
+        lines.append(f"{role}: {text}")
+    return "\n".join(lines)
 
 ########################################
 # PDF UPLOAD
@@ -332,23 +357,21 @@ additional_context = st.text_area("Optional additional angles or considerations:
 run_pipeline = st.button("Run Pipeline")
 
 ########################################
-# Manual Mode Step-by-Step Execution
+# Helper: run the Summarizer step
 ########################################
 
-def run_summarization_step():
-    st.session_state.pipeline_results["overview"] = summarize_text(
+def do_summarization():
+    # Combine the raw text with any conversation from a "pre_summarizer" key if needed
+    # (In this example we do not have a pre-summarizer chat, but code is flexible.)
+    return summarize_text(
         st.session_state.final_input_text,
         summarizer_model,
         verbose
     )
 
-def run_ideation_step():
-    st.session_state.pipeline_results["initial_ideas"] = ideate(
-        st.session_state.pipeline_results["overview"],
-        additional_context,
-        ideator_model,
-        verbose
-    )
+########################################
+# Manual Mode Step-by-Step Execution
+########################################
 
 def run_critique_step(current_ideas):
     return critique(current_ideas, critic_model, verbose)
@@ -362,6 +385,128 @@ def run_termination_check(refined_ideas):
 def run_strengths_weaknesses_assessment(current_ideas):
     return assess_strengths_weaknesses(current_ideas, terminator_model, verbose)
 
+def proceed_from_summarization():
+    """
+    Gathers the conversation from 'overview' key, appends it to the summary,
+    then runs ideation immediately, sets step to 1.
+    """
+    summary = st.session_state.pipeline_results["overview"]
+    conversation_text = get_conversation_transcript("overview")  # entire chat with summary
+    combined_text = summary + "\n\n----\nConversation:\n" + conversation_text
+    # Now do ideation
+    output = ideate(combined_text, additional_context, ideator_model, verbose)
+    st.session_state.pipeline_results["initial_ideas"] = output
+    # Initialize iteration_data if needed
+    if "iteration_data" not in st.session_state.pipeline_results:
+        st.session_state.pipeline_results["iteration_data"] = []
+    if len(st.session_state.pipeline_results["iteration_data"]) == 0:
+        st.session_state.pipeline_results["iteration_data"].append(("", "", output, ""))
+    # Next step
+    st.session_state.manual_current_step = 1
+    st.rerun()
+
+def proceed_from_ideation():
+    """
+    Gathers conversation from 'initial_ideas' key, appends it to the existing ideas,
+    then does a critique. Step -> 2
+    """
+    iteration_data = st.session_state.pipeline_results["iteration_data"]
+    current_ideas = iteration_data[-1][2]  # last improved ideas
+    conversation_text = get_conversation_transcript("initial_ideas")
+    combined_text = current_ideas + "\n\n----\nConversation:\n" + conversation_text
+    new_critique = run_critique_step(combined_text)
+    iteration_data[-1] = (new_critique, "", current_ideas, "")
+    st.session_state.pipeline_results["iteration_data"] = iteration_data
+    st.session_state.manual_current_step = 2
+    st.rerun()
+
+def proceed_from_critique():
+    """
+    Gathers conversation from iteration_{len(iteration_data)}_critique,
+    merges with the existing critique text, does re-ideation. Step -> 3
+    """
+    iteration_data = st.session_state.pipeline_results["iteration_data"]
+    # iteration_data[-1] = (critique_text, critique_section, improved_ideas, verdict)
+    critique_key = f"iteration_{len(iteration_data)}_critique"
+    old_critique = iteration_data[-1][0]
+    conversation_text = get_conversation_transcript(critique_key)
+    combined_critique = old_critique + "\n\n----\nConversation:\n" + conversation_text
+    current_ideas = iteration_data[-1][2]
+    refinement_out = run_re_ideate_step(current_ideas, combined_critique)
+    critique_section, improved_ideas = parse_refinement_output(refinement_out)
+    iteration_data[-1] = (old_critique, critique_section, improved_ideas, "")
+    st.session_state.pipeline_results["iteration_data"] = iteration_data
+    st.session_state.manual_current_step = 3
+    st.rerun()
+
+def proceed_from_reideate():
+    """
+    Gathers conversation from iteration_{len(iteration_data)}_internal_reasoning and
+    iteration_{len(iteration_data)}_refined_directions, merges them with improved_ideas,
+    then runs termination check. Step -> 4
+    """
+    iteration_data = st.session_state.pipeline_results["iteration_data"]
+    idx = len(iteration_data)
+    critique_section_key = f"iteration_{idx}_internal_reasoning"
+    refined_dir_key = f"iteration_{idx}_refined_directions"
+
+    # We won't actually combine them with the improved ideas text for the termination check,
+    # but let's do it anyway for completeness. It's all just extra context.
+    # The only required input for termination is the improved_ideas themselves,
+    # but let's pass the conversation in if we want to keep it consistent.
+    improved_ideas = iteration_data[-1][2]
+    critique_section = iteration_data[-1][1]
+
+    conv_critique_section = get_conversation_transcript(critique_section_key)
+    conv_refined = get_conversation_transcript(refined_dir_key)
+    combined_for_termination = (
+        improved_ideas
+        + "\n\n----\nCRITIQUE_SECTION_CONV:\n"
+        + critique_section
+        + "\n\n----\nCRITIQUE_SECTION_CHAT:\n"
+        + conv_critique_section
+        + "\n\n----\nREFINED_DIR_CHAT:\n"
+        + conv_refined
+    )
+    new_verdict = run_termination_check(combined_for_termination)
+    iteration_data[-1] = (
+        iteration_data[-1][0],
+        iteration_data[-1][1],
+        iteration_data[-1][2],
+        new_verdict,
+    )
+    st.session_state.pipeline_results["iteration_data"] = iteration_data
+    st.session_state.manual_current_step = 4
+    st.rerun()
+
+def proceed_after_termination():
+    """
+    If verdict says 'needs more iteration' but we still have capacity,
+    or if it's good enough, or if we've exhausted tries.
+    """
+    iteration_data = st.session_state.pipeline_results["iteration_data"]
+    verdict = iteration_data[-1][3]
+    final_ideas = iteration_data[-1][2]
+
+    if verdict.startswith("Good enough"):
+        st.session_state.pipeline_results["final_good_enough"] = True
+        st.session_state.pipeline_results["final_ideas"] = final_ideas
+        st.session_state.manual_current_step = 999
+        st.rerun()
+    else:
+        if len(iteration_data) < max_iterations:
+            # proceed to another iteration
+            iteration_data.append(("", "", final_ideas, ""))
+            st.session_state.pipeline_results["iteration_data"] = iteration_data
+            st.session_state.manual_current_step = 2  # go to Critique again
+            st.rerun()
+        else:
+            # final not good enough
+            st.session_state.pipeline_results["final_good_enough"] = False
+            st.session_state.pipeline_results["final_ideas"] = final_ideas
+            st.session_state.manual_current_step = 999
+            st.rerun()
+
 ########################################
 # Main Execution Logic
 ########################################
@@ -372,8 +517,6 @@ if run_pipeline:
     st.session_state.pipeline_results.clear()
     st.session_state.pipeline_ran = False
     st.session_state.manual_current_step = 0
-
-    # Decide which text to use
     st.session_state.final_input_text = pdf_text.strip() if pdf_text.strip() else user_text.strip()
 
     if not st.session_state.final_input_text:
@@ -396,17 +539,16 @@ if run_pipeline:
                 critique_section, improved_ideas = parse_refinement_output(refinement_output)
 
                 verdict = check_termination(improved_ideas, terminator_model, verbose)
+                iteration_data.append((critique_text, critique_section, improved_ideas, verdict))
+
                 if verdict.startswith("Good enough"):
                     final_good_enough = True
                     current_ideas = improved_ideas
-                    iteration_data.append((critique_text, critique_section, improved_ideas, verdict))
                     break
                 else:
-                    iteration_data.append((critique_text, critique_section, improved_ideas, verdict))
                     current_ideas = improved_ideas
                     iteration_count += 1
 
-            # If not good enough after max iterations
             if not final_good_enough:
                 assessment = assess_strengths_weaknesses(current_ideas, terminator_model, verbose)
                 st.session_state.pipeline_results["assessment"] = assessment
@@ -426,193 +568,231 @@ if run_pipeline:
 
         else:
             # MANUAL MODE
-            # We will handle step by step. The steps:
-            # 0: Summarize
-            # 1: Ideate
-            # 2: Critique
-            # 3: Re-Ideate
-            # 4: Check Termination
-            # If not done, keep looping until max iterations or user is satisfied
-
-            # Initialize iteration data if not present
-            if "iteration_data" not in st.session_state.pipeline_results:
-                st.session_state.pipeline_results["iteration_data"] = []
+            # Start step 0 (summarization)
             st.session_state.pipeline_ran = True
-            st.session_state.manual_current_step = 0  # Start with Summarization
+            st.session_state.manual_current_step = 0
+            st.session_state.pipeline_results["iteration_data"] = []
             st.rerun()
 
-# If pipeline has started in manual mode, handle the step-by-step UI
+########################################
+# MANUAL MODE UI RENDERING
+########################################
+
 if st.session_state.pipeline_ran and st.session_state.manual_mode and st.session_state.final_input_text:
     iteration_data = st.session_state.pipeline_results.get("iteration_data", [])
     current_step = st.session_state.manual_current_step
 
-    # We keep track of up to max_iterations
-    # Steps in each iteration: Summarize (only once at iteration 0), Ideate, Critique, Re-ideate, Terminate
-    # Once we finalize, we either go next iteration or conclude
+    # Step definitions in manual mode:
+    # 0: Summarization
+    #   after we get a summary, we can chat with it, rerun, or proceed -> auto-run Ideation
+    # 1: Ideation
+    #   chat, rerun if desired, or proceed -> auto-run Critique
+    # 2: Critique
+    #   chat, rerun if desired, or proceed -> auto-run Re-Ideate
+    # 3: Re-Ideate
+    #   chat, rerun if desired, or proceed -> auto-run Termination
+    # 4: Termination
+    #   chat, rerun if desired, or proceed -> either more iteration or finalize
+    # 999: Done
 
     if current_step == 0:
         st.subheader("Step 1: Summarization")
         if "overview" not in st.session_state.pipeline_results:
-            st.info("Click 'Run Summarization' below to generate the summary. You can rerun it or chat with it before proceeding.")
+            st.info("Click 'Run Summarization' to generate the summary. Then you can chat, rerun, or proceed to Ideation.")
         else:
-            st.write(st.session_state.pipeline_results["overview"])
-            download_expander_content("overview", st.session_state.pipeline_results["overview"])
-            chat_interface("overview", st.session_state.pipeline_results["overview"], summarizer_model, verbose)
+            # Show existing summary
+            with st.expander("Summarization Output", expanded=False):
+                st.write(st.session_state.pipeline_results["overview"])
+                download_expander_content("overview", st.session_state.pipeline_results["overview"])
+
+            with st.expander("Summarization Chat (Closed by default)", expanded=False):
+                chat_interface("overview", st.session_state.pipeline_results["overview"], summarizer_model, verbose)
 
         if st.button("Run Summarization"):
-            run_summarization_step()
+            st.session_state.pipeline_results["overview"] = do_summarization()
             st.rerun()
 
         if "overview" in st.session_state.pipeline_results:
-            if st.button("Proceed to Next Step (Ideation)"):
-                st.session_state.manual_current_step = 1
-                st.rerun()
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("Rerun Summarization"):
+                    st.session_state.pipeline_results["overview"] = do_summarization()
+                    st.rerun()
+            with col2:
+                if st.button("Proceed to Ideation"):
+                    proceed_from_summarization()
 
     elif current_step == 1:
         st.subheader("Step 2: Ideation")
         if "initial_ideas" not in st.session_state.pipeline_results:
-            st.info("Click 'Run Ideation' to generate alignment ideas.")
+            st.info("We do not have initial ideas yet. Possibly something went wrong.")
         else:
-            st.write(st.session_state.pipeline_results["initial_ideas"])
-            download_expander_content("initial_alignment_ideas", st.session_state.pipeline_results["initial_ideas"])
-            chat_interface("initial_ideas", st.session_state.pipeline_results["initial_ideas"], ideator_model, verbose)
+            with st.expander("Initial Alignment Ideas", expanded=False):
+                st.write(st.session_state.pipeline_results["initial_ideas"])
+                download_expander_content("initial_alignment_ideas", st.session_state.pipeline_results["initial_ideas"])
 
-        if st.button("Run Ideation"):
-            run_ideation_step()
-            st.rerun()
+            with st.expander("Ideation Chat (Closed by default)", expanded=False):
+                chat_interface("initial_ideas", st.session_state.pipeline_results["initial_ideas"], ideator_model, verbose)
 
-        if "initial_ideas" in st.session_state.pipeline_results:
-            # We haven't done any iterative steps yet, so set up iteration data
-            if len(iteration_data) == 0:
-                iteration_data.append(("", "", st.session_state.pipeline_results["initial_ideas"], "")) 
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Rerun Ideation"):
+                # We'll combine the conversation with the current summary to produce new ideas
+                # That means: combine st.session_state.pipeline_results["overview"] with
+                # the entire conversation from "initial_ideas" (if any).
+                # Then do ideate again.
+                overview_plus_chat = (
+                    st.session_state.pipeline_results["overview"]
+                    + "\n\n----\nConversation:\n"
+                    + get_conversation_transcript("initial_ideas")
+                )
+                new_ideas = ideate(overview_plus_chat, additional_context, ideator_model, verbose)
+                st.session_state.pipeline_results["initial_ideas"] = new_ideas
+                # Update iteration_data[-1] if it exists
+                if len(iteration_data) == 0:
+                    iteration_data.append(("", "", new_ideas, ""))
+                else:
+                    iteration_data[-1] = (iteration_data[-1][0], iteration_data[-1][1], new_ideas, iteration_data[-1][3])
                 st.session_state.pipeline_results["iteration_data"] = iteration_data
-            if st.button("Proceed to Next Step (Critique)"):
-                st.session_state.manual_current_step = 2
                 st.rerun()
+        with col2:
+            if st.button("Proceed to Critique"):
+                proceed_from_ideation()
 
     elif current_step == 2:
         st.subheader("Step 3: Critique")
-        # The current ideas to critique is iteration_data[-1][2]
-        current_ideas = iteration_data[-1][2]
-        critique_text = iteration_data[-1][0]  # if it exists
-        if not critique_text:
-            st.info("Click 'Run Critique' to critique the current ideas.")
+        # iteration_data[-1] = (critique_text, critique_section, improved_ideas, verdict)
+        if not iteration_data or not iteration_data[-1][0]:
+            st.info("No critique has been run or stored yet. Possibly click 'Rerun Critique'.")
         else:
-            st.write(critique_text)
-            download_expander_content(f"iteration_{len(iteration_data)}_critique", critique_text)
-            chat_interface(f"iteration_{len(iteration_data)}_critique", critique_text, critic_model, verbose)
+            with st.expander(f"Iteration {len(iteration_data)} Critique", expanded=False):
+                st.write(iteration_data[-1][0])
+                download_expander_content(f"iteration_{len(iteration_data)}_critique", iteration_data[-1][0])
 
-        if st.button("Run Critique"):
-            new_critique = run_critique_step(current_ideas)
-            # Overwrite iteration_data for this iteration
-            # iteration_data entry: (critique_text, critique_section, improved_ideas, verdict)
-            # We'll fill out partial. We'll set improved_ideas and verdict to "" until we re-ideate.
-            iteration_data[-1] = (new_critique, "", current_ideas, "")
-            st.session_state.pipeline_results["iteration_data"] = iteration_data
-            st.rerun()
+            with st.expander("Critique Chat (Closed by default)", expanded=False):
+                chat_interface(f"iteration_{len(iteration_data)}_critique", iteration_data[-1][0], critic_model, verbose)
 
-        if iteration_data[-1][0]:  # If we have a critique
-            if st.button("Proceed to Next Step (Re-Ideate)"):
-                st.session_state.manual_current_step = 3
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Rerun Critique"):
+                current_ideas = iteration_data[-1][2]
+                combined_ideas = (
+                    current_ideas
+                    + "\n\n----\nConversation:\n"
+                    + get_conversation_transcript(f"iteration_{len(iteration_data)}_critique")
+                )
+                new_critique = run_critique_step(combined_ideas)
+                iteration_data[-1] = (new_critique, iteration_data[-1][1], current_ideas, iteration_data[-1][3])
+                st.session_state.pipeline_results["iteration_data"] = iteration_data
                 st.rerun()
+        with col2:
+            if st.button("Proceed to Re-Ideate"):
+                proceed_from_critique()
 
     elif current_step == 3:
         st.subheader("Step 4: Re-Ideate")
-        # We have the critique in iteration_data[-1][0], current_ideas in iteration_data[-1][2]
-        critique_text = iteration_data[-1][0]
-        current_ideas = iteration_data[-1][2]
-        refinement_output = iteration_data[-1][1]  # stored in critique_section, but let's reuse
+        # iteration_data[-1] = (critique_text, critique_section, improved_ideas, verdict)
+        idx = len(iteration_data)
+        critique_section = iteration_data[-1][1]
+        improved_ideas = iteration_data[-1][2]
 
-        if not refinement_output:  
-            st.info("Click 'Run Re-Ideate' to incorporate the critique into new directions.")
+        if not critique_section and not improved_ideas:
+            st.info("No re-ideation has been run or stored yet. Possibly click 'Rerun Re-Ideate'.")
         else:
-            st.write("**Internal Reasoning (CRITIQUE_START/END):**")
-            st.write(refinement_output)
-            download_expander_content(f"iteration_{len(iteration_data)}_internal_reasoning", refinement_output)
-            chat_interface(f"iteration_{len(iteration_data)}_internal_reasoning", refinement_output, ideator_model, verbose)
+            with st.expander(f"Iteration {idx} Internal Reasoning (CRITIQUE_START/END)", expanded=False):
+                st.write(critique_section)
+                download_expander_content(f"iteration_{idx}_internal_reasoning", critique_section)
 
-            st.write("**Refined Directions:**")
-            st.write(iteration_data[-1][2])  # we update improved ideas below after parse
-            download_expander_content(f"iteration_{len(iteration_data)}_refined_directions", iteration_data[-1][2])
-            chat_interface(f"iteration_{len(iteration_data)}_refined_directions", iteration_data[-1][2], ideator_model, verbose)
+            with st.expander(f"Iteration {idx} Refined Directions", expanded=False):
+                st.write(improved_ideas)
+                download_expander_content(f"iteration_{idx}_refined_directions", improved_ideas)
 
-        if st.button("Run Re-Ideate"):
-            refinement_out = run_re_ideate_step(current_ideas, critique_text)
-            # parse
-            critique_section, improved_ideas = parse_refinement_output(refinement_out)
-            # iteration_data entry: (critique_text, critique_section, improved_ideas, verdict)
-            iteration_data[-1] = (critique_text, critique_section, improved_ideas, "")
-            st.session_state.pipeline_results["iteration_data"] = iteration_data
-            st.rerun()
+            with st.expander("Re-Ideation Chats (Closed by default)", expanded=False):
+                # Chat for the CRITIQUE_START/END portion
+                chat_interface(f"iteration_{idx}_internal_reasoning", critique_section, ideator_model, verbose)
+                st.write("---")
+                # Chat for the refined directions portion
+                chat_interface(f"iteration_{idx}_refined_directions", improved_ideas, ideator_model, verbose)
 
-        if iteration_data[-1][1]:  # We have some re-ideation
-            if st.button("Proceed to Next Step (Termination Check)"):
-                st.session_state.manual_current_step = 4
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Rerun Re-Ideate"):
+                old_critique = iteration_data[-1][0]
+                old_crit_section = iteration_data[-1][1]
+                old_improved = iteration_data[-1][2]
+                # Combine conversation from the two expanders
+                conv_1 = get_conversation_transcript(f"iteration_{idx}_internal_reasoning")
+                conv_2 = get_conversation_transcript(f"iteration_{idx}_refined_directions")
+                combined_for_reideate = (
+                    old_improved
+                    + "\n\n----\n(Existing critique text):\n"
+                    + old_critique
+                    + "\n\n----\nCRITIQUE_SECTION:\n"
+                    + old_crit_section
+                    + "\n\n----\nCONV_INTERNAL:\n"
+                    + conv_1
+                    + "\n\n----\nCONV_REFINED:\n"
+                    + conv_2
+                )
+                refinement_out = run_re_ideate_step(old_improved, combined_for_reideate)
+                new_critique_section, new_improved_ideas = parse_refinement_output(refinement_out)
+                iteration_data[-1] = (old_critique, new_critique_section, new_improved_ideas, iteration_data[-1][3])
+                st.session_state.pipeline_results["iteration_data"] = iteration_data
                 st.rerun()
+        with col2:
+            if st.button("Proceed to Termination Check"):
+                proceed_from_reideate()
 
     elif current_step == 4:
         st.subheader("Step 5: Termination Check")
-        # iteration_data[-1] has (critique_text, critique_section, improved_ideas, verdict)
-        improved_ideas = iteration_data[-1][2]
+        idx = len(iteration_data)
         verdict = iteration_data[-1][3]
         if not verdict:
-            st.info("Click 'Run Termination Check' to see if it's good enough or needs more iteration.")
+            st.info("No verdict yet. Possibly click 'Rerun Termination Check'.")
         else:
             st.write(f"Termination Check: {verdict}")
 
-        if st.button("Run Termination Check"):
-            new_verdict = run_termination_check(improved_ideas)
-            iteration_data[-1] = (iteration_data[-1][0],
-                                  iteration_data[-1][1],
-                                  iteration_data[-1][2],
-                                  new_verdict)
-            st.session_state.pipeline_results["iteration_data"] = iteration_data
-            st.rerun()
+        with st.expander("Termination Check Chat (Closed by default)", expanded=False):
+            chat_interface(f"iteration_{idx}_termination", iteration_data[-1][2], terminator_model, verbose)
 
-        # If we have a verdict, check if "Good enough"
-        if iteration_data[-1][3]:
-            new_verdict = iteration_data[-1][3]
-            if new_verdict.startswith("Good enough"):
-                st.success("The directions are approved!")
-                st.session_state.pipeline_results["final_good_enough"] = True
-                st.session_state.pipeline_results["final_ideas"] = iteration_data[-1][2]
-                st.session_state.manual_current_step = 999  # done
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Rerun Termination Check"):
+                # Combine existing refined ideas with any chat under iteration_{idx}_termination
+                improved_ideas = iteration_data[-1][2]
+                conversation_text = get_conversation_transcript(f"iteration_{idx}_termination")
+                combined_for_termination = (
+                    improved_ideas
+                    + "\n\n----\nTermination Chat:\n"
+                    + conversation_text
+                )
+                new_verdict = run_termination_check(combined_for_termination)
+                iteration_data[-1] = (
+                    iteration_data[-1][0],
+                    iteration_data[-1][1],
+                    iteration_data[-1][2],
+                    new_verdict,
+                )
+                st.session_state.pipeline_results["iteration_data"] = iteration_data
                 st.rerun()
-            else:
-                # Not good enough
-                if len(iteration_data) < max_iterations:
-                    st.warning("It needs more iteration. You can proceed to next iteration if you'd like.")
-                    if st.button("Proceed to Another Iteration"):
-                        # Start another iteration
-                        # That means we treat iteration_data[-1][2] as the new ideas, go to step (2) critique again
-                        iteration_data.append(("", "", iteration_data[-1][2], ""))
-                        st.session_state.pipeline_results["iteration_data"] = iteration_data
-                        st.session_state.manual_current_step = 2  # go back to Critique
-                        st.rerun()
-                else:
-                    st.warning("Reached max iterations. We'll finalize with a strengths & weaknesses assessment.")
-                    st.session_state.pipeline_results["final_good_enough"] = False
-                    st.session_state.pipeline_results["final_ideas"] = iteration_data[-1][2]
-                    # Move to final step
-                    st.session_state.manual_current_step = 999
-                    st.rerun()
+        with col2:
+            if st.button("Proceed (Finalize or More Iteration)"):
+                proceed_after_termination()
 
     elif current_step == 999:
-        # Conclude
+        st.subheader("Results")
         final_good_enough = st.session_state.pipeline_results.get("final_good_enough", False)
         final_ideas = st.session_state.pipeline_results.get("final_ideas", "")
         iteration_data = st.session_state.pipeline_results["iteration_data"]
 
         if final_good_enough:
-            # Show final ideas
             with st.expander("Final Accepted Ideas", expanded=True):
                 st.write(final_ideas)
                 download_expander_content("final_accepted_ideas", final_ideas)
                 chat_interface("final_accepted_ideas", final_ideas, ideator_model, verbose)
         else:
-            # Not good enough
             st.warning("Not approved after max iterations. Displaying final output and assessing strengths & weaknesses.")
-            with st.expander("Final Non-Approved Ideas"):
+            with st.expander("Final Non-Approved Ideas", expanded=False):
                 st.write(final_ideas)
                 download_expander_content("final_non_approved_ideas", final_ideas)
                 chat_interface("final_non_approved_ideas", final_ideas, ideator_model, verbose)
@@ -629,10 +809,9 @@ if st.session_state.pipeline_ran and st.session_state.manual_mode and st.session
                 chat_interface("strengths_weaknesses_assessment", assessment, ideator_model, verbose)
 
         st.success("Manual pipeline run complete.")
-        st.stop()
 
 ########################################
-# Automatic Mode Results Display (if pipeline ran automatically)
+# Automatic Mode Results Display
 ########################################
 
 if st.session_state.pipeline_ran and not st.session_state.manual_mode:
@@ -642,30 +821,29 @@ if st.session_state.pipeline_ran and not st.session_state.manual_mode:
     final_good_enough = st.session_state.pipeline_results["final_good_enough"]
     final_ideas = st.session_state.pipeline_results["final_ideas"]
     assessment = st.session_state.pipeline_results["assessment"]
-    additional_context = st.session_state.pipeline_results["additional_context"]
 
-    with st.expander("Comprehensive Systematic Overview"):
+    with st.expander("Comprehensive Systematic Overview", expanded=False):
         st.write(overview)
         download_expander_content("overview", overview)
         chat_interface("overview", overview, ideator_model, verbose)
 
-    with st.expander("Initial Alignment Ideas"):
+    with st.expander("Initial Alignment Ideas", expanded=False):
         st.write(initial_ideas)
         download_expander_content("initial_alignment_ideas", initial_ideas)
         chat_interface("initial_ideas", initial_ideas, ideator_model, verbose)
 
     for i, (critique_text, critique_section, improved_ideas, verdict) in enumerate(iteration_data, start=1):
-        with st.expander(f"Iteration {i} Critique"):
+        with st.expander(f"Iteration {i} Critique", expanded=False):
             st.write(critique_text)
             download_expander_content(f"iteration_{i}_critique", critique_text)
             chat_interface(f"iteration_{i}_critique", critique_text, ideator_model, verbose)
 
-        with st.expander(f"Iteration {i} Internal Reasoning (CRITIQUE_START/END)"):
+        with st.expander(f"Iteration {i} Internal Reasoning (CRITIQUE_START/END)", expanded=False):
             st.write(critique_section)
             download_expander_content(f"iteration_{i}_internal_reasoning", critique_section)
             chat_interface(f"iteration_{i}_internal_reasoning", critique_section, ideator_model, verbose)
 
-        with st.expander(f"Iteration {i} Refined Directions"):
+        with st.expander(f"Iteration {i} Refined Directions", expanded=False):
             st.write(improved_ideas)
             download_expander_content(f"iteration_{i}_refined_directions", improved_ideas)
             chat_interface(f"iteration_{i}_refined_directions", improved_ideas, ideator_model, verbose)
@@ -679,7 +857,7 @@ if st.session_state.pipeline_ran and not st.session_state.manual_mode:
             chat_interface("final_accepted_ideas", final_ideas, ideator_model, verbose)
     else:
         st.warning("Not approved after max iterations. Displaying final output and assessing strengths & weaknesses.")
-        with st.expander("Final Non-Approved Ideas"):
+        with st.expander("Final Non-Approved Ideas", expanded=False):
             st.write(final_ideas)
             download_expander_content("final_non_approved_ideas", final_ideas)
             chat_interface("final_non_approved_ideas", final_ideas, ideator_model, verbose)
