@@ -17,36 +17,36 @@ st.write(
 )
 st.write(
     "You can choose different LLMs for each stage (Summarizer, Ideator, Critic, Terminator) "
-    "and run multiple iterations. If after N iterations it still isn't good enough, the final "
-    "output plus a strengths/weaknesses assessment is displayed."
+    "and run multiple iterations. If after N iterations it still isn't good enough, "
+    "the final output plus a strengths/weaknesses assessment is displayed."
 )
 st.write(
     "You can upload a PDF or paste text. If both are provided, PDF content takes precedence."
 )
 st.write(
-    "In 'Manual' mode, each step can be re-run or refined with human-in-the-loop feedback. "
-    "In 'Automatic' mode, the entire pipeline runs end-to-end at once."
+    "Within each expander, you can chat with an LLM to further explore the displayed content. "
+    "You can also download the contents of the expander as markdown. "
+    "Select 'Automatic' for an end-to-end run or 'Manual' for step-by-step control."
 )
 
-# Session state
 if "pipeline_ran" not in st.session_state:
     st.session_state.pipeline_ran = False
-if "manual_step" not in st.session_state:
-    st.session_state.manual_step = "not_started"
 if "conversation_states" not in st.session_state:
-    st.session_state.conversation_states = {}
+    st.session_state.conversation_states = {}  # key -> list of messages
 if "pipeline_results" not in st.session_state:
     st.session_state.pipeline_results = {}
+if "manual_step" not in st.session_state:
+    st.session_state.manual_step = "not_started"
 
 ########################################
-# SECRETS (UPDATE AS NEEDED)
+# SECRETS (ADJUST AS NEEDED)
 ########################################
 
 openai_client = OpenAI(api_key=st.secrets["API_KEY"])
 anthropic_client = anthropic.Anthropic(api_key=st.secrets["ANTHROPIC_API_KEY"])
 
 ########################################
-# HELPER FUNCTIONS
+# MODEL DETECTION / DISPATCH
 ########################################
 
 def is_o1_model(m):
@@ -62,7 +62,6 @@ def adjust_messages_for_o1(messages):
     adjusted = []
     for msg in messages:
         if msg["role"] == "system":
-            # Convert system to user with INSTRUCTIONS prefix
             content = "INSTRUCTIONS:\n" + msg["content"]
             adjusted.append({"role": "user", "content": content})
         else:
@@ -70,14 +69,14 @@ def adjust_messages_for_o1(messages):
     return adjusted
 
 def run_completion(messages, model, verbose=False):
-    """Core function to dispatch to different model endpoints."""
     if is_o1_model(model):
         messages = adjust_messages_for_o1(messages)
         if verbose:
             st.write("**Using O1 Model:**", model)
             st.write("**Messages:**", messages)
         completion = openai_client.chat.completions.create(
-            model=model, messages=messages
+            model=model,
+            messages=messages
         )
         response = completion.choices[0].message.content
         if verbose:
@@ -89,7 +88,8 @@ def run_completion(messages, model, verbose=False):
             st.write("**Using GPT-4o Model:**", model)
             st.write("**Messages:**", messages)
         completion = openai_client.chat.completions.create(
-            model=model, messages=messages
+            model=model,
+            messages=messages
         )
         response = completion.choices[0].message.content
         if verbose:
@@ -105,7 +105,7 @@ def run_completion(messages, model, verbose=False):
         system_str = "\n".join(system_str_list) if system_str_list else None
 
         kwargs = {
-            "model": "claude-3-5-sonnet-20241022",  # Example; adjust as needed
+            "model": "claude-3-5-sonnet-20241022",  # Example name
             "max_tokens": 1000,
             "messages": user_assistant_msgs
         }
@@ -127,12 +127,13 @@ def run_completion(messages, model, verbose=False):
 
 SUMMARIZER_SYSTEM = """You are a specialized research assistant focused on analyzing scholarly research text and identifying AI alignment implications.
 Provide a comprehensive, systematic overview:
-- Domain, key hypotheses.
-- Methods, results, theoretical contributions.
-Be factual, thorough, and substantive; no vague language.
+- Domain, key hypotheses
+- Methods, results, theoretical contributions
+Be factual, thorough, no vagueness.
 """
 
-SUMMARIZER_USER = """Below is a research text. Provide the comprehensive overview as requested above. It should be extremely substantive and should serve as a functional stand-in for someone reading the paper. Leave out none of the 'meat.'
+SUMMARIZER_USER = """Below is a research text. Provide the comprehensive overview as requested above. 
+It should be extremely substantive, serving as a functional stand-in for someone reading the paper.
 
 Research Text:
 {user_text}
@@ -141,8 +142,8 @@ Research Text:
 IDEATOR_SYSTEM = """You are an AI alignment research ideation agent.
 Steps:
 1. Given the overview, propose original alignment research directions.
-2. Then we will critique them (no fix at that step).
-3. Then you will produce updated research directions integrating the critique seamlessly so the final output is standalone and improved.
+2. Then critique them (no fix at that step).
+3. Then produce updated research directions integrating the critique seamlessly.
 """
 
 IDEATOR_IDEATION_USER = """Use the overview and the additional angles below to propose several original AI alignment research directions.
@@ -154,35 +155,34 @@ Additional angles to consider optionally inputted by the user:
 {additional_context}
 """
 
-CRITIC_SYSTEM = """You are a critic focused on assessing alignment research directions for clarity, novelty, feasibility. Do not fix them, just critique:
-- Identify weaknesses, if any
-- Suggest what is missing, if anything
-- Indicate what could be improved, if anything
+CRITIC_SYSTEM = """You are a critic of alignment directions. Just critique them:
+- Identify weaknesses
+- Mention what's missing
+- Indicate improvements
 """
 
-CRITIC_USER = """Critique the following AI alignment research directions for clarity, novelty, feasibility, and actionable value.
+CRITIC_USER = """Critique the following AI alignment research directions for clarity, novelty, feasibility, and actionability.
 
 Directions:
 {ideas}
 """
 
-RE_IDEATE_SYSTEM = """You are an AI alignment ideation agent revisiting the directions after critique.
-Instructions:
-- Consider the critique carefully.
-- Produce a new standalone set of improved directions that address the critique.
-- The new ideas should read as original, not a direct reply to the critique. Do not mention the critique explicitly, just integrate improvements.
+RE_IDEATE_SYSTEM = """You are an AI alignment ideation agent revisiting directions after critique:
+- Integrate critique carefully
+- Produce a new standalone set of improved directions
+- The new ideas should not explicitly mention the critique; incorporate seamlessly
 
 Use format:
 CRITIQUE_START
-(Brief reasoning about what needed improvement)
+(Brief reasoning)
 CRITIQUE_END
 
 IMPROVED_START
-(Your improved, standalone directions)
+(Improved directions)
 IMPROVED_END
 """
 
-RE_IDEATE_USER = """Here are the previous directions and the critique:
+RE_IDEATE_USER = """Here are the previous directions and their critique:
 
 Previous Directions:
 {ideas}
@@ -194,8 +194,8 @@ Now produce improved directions as per instructions.
 """
 
 TERMINATOR_SYSTEM = """You are an evaluator of alignment research directions.
-If good enough to present back to the user, say "Good enough".
-If not, say "Needs more iteration: <reason>" where <reason> is clear and specific.
+If good enough to present to user, say "Good enough".
+Otherwise, say "Needs more iteration: <reason>".
 No other text.
 """
 
@@ -203,18 +203,18 @@ TERMINATOR_USER = """Evaluate these improved alignment directions:
 
 {refined_ideas}
 
-Are they good enough or need more iteration?
+Are they good enough or do they need more iteration?
 """
 
 TERMINATOR_ASSESS_SYSTEM = """You are an evaluator.
-Given the final alignment directions, provide a strengths and weaknesses assessment since they were not approved after multiple iterations. Be factual and concise.
+Given final directions, provide strengths & weaknesses. Be factual and concise.
 """
 
 TERMINATOR_ASSESS_USER = """These are the final directions after all attempts:
 
 {final_ideas}
 
-Please provide their strengths and weaknesses.
+Please provide strengths and weaknesses.
 """
 
 ########################################
@@ -222,55 +222,54 @@ Please provide their strengths and weaknesses.
 ########################################
 
 def summarize_text(user_text, model, verbose=False):
-    messages = [
+    msgs = [
         {"role": "system", "content": SUMMARIZER_SYSTEM},
         {"role": "user", "content": SUMMARIZER_USER.format(user_text=user_text)}
     ]
-    return run_completion(messages, model, verbose=verbose)
+    return run_completion(msgs, model, verbose=verbose)
 
 def ideate(overview, additional_context, model, verbose=False):
-    messages = [
+    msgs = [
         {"role": "system", "content": IDEATOR_SYSTEM},
         {"role": "user", "content": IDEATOR_IDEATION_USER.format(
             overview=overview,
             additional_context=additional_context
         )}
     ]
-    return run_completion(messages, model, verbose=verbose)
+    return run_completion(msgs, model, verbose=verbose)
 
 def critique(ideas, model, verbose=False):
-    messages = [
+    msgs = [
         {"role": "system", "content": CRITIC_SYSTEM},
         {"role": "user", "content": CRITIC_USER.format(ideas=ideas)}
     ]
-    return run_completion(messages, model, verbose=verbose)
+    return run_completion(msgs, model, verbose=verbose)
 
 def re_ideate(ideas, critique_text, model, verbose=False):
-    messages = [
+    msgs = [
         {"role": "system", "content": RE_IDEATE_SYSTEM},
         {"role": "user", "content": RE_IDEATE_USER.format(
             ideas=ideas, 
             critique=critique_text
         )}
     ]
-    return run_completion(messages, model, verbose=verbose)
+    return run_completion(msgs, model, verbose=verbose)
 
 def check_termination(refined_ideas, model, verbose=False):
-    messages = [
+    msgs = [
         {"role": "system", "content": TERMINATOR_SYSTEM},
         {"role": "user", "content": TERMINATOR_USER.format(refined_ideas=refined_ideas)}
     ]
-    return run_completion(messages, model, verbose=verbose)
+    return run_completion(msgs, model, verbose=verbose)
 
 def assess_strengths_weaknesses(final_ideas, model, verbose=False):
-    messages = [
+    msgs = [
         {"role": "system", "content": TERMINATOR_ASSESS_SYSTEM},
         {"role": "user", "content": TERMINATOR_ASSESS_USER.format(final_ideas=final_ideas)}
     ]
-    return run_completion(messages, model, verbose=verbose)
+    return run_completion(msgs, model, verbose=verbose)
 
 def parse_refinement_output(refinement_output):
-    """Extract CRITIQUE_START...END and IMPROVED_START...END sections if present."""
     critique_pattern = r"CRITIQUE_START\s*(.*?)\s*CRITIQUE_END"
     improved_pattern = r"IMPROVED_START\s*(.*?)\s*IMPROVED_END"
 
@@ -287,71 +286,67 @@ def parse_refinement_output(refinement_output):
     return critique_section, final_refined_ideas
 
 ########################################
-# "CHAT" WITHIN EXPANDERS (WITHOUT st.chat_input)
+# CHAT WITHIN EXPANDER (Original approach)
 ########################################
 
 def ensure_conversation_state(key):
-    """Make sure the conversation state for a given key is present."""
     if key not in st.session_state.conversation_states:
         st.session_state.conversation_states[key] = []
 
 def chat_interface(key, base_content, model, verbose=False):
     """
-    A minimal chat-like interface with text_input + "Send" button,
-    preserving conversation across re-runs.
+    Same approach as the original code: we use st.chat_input with a unique key,
+    preserve messages in st.session_state, and just re-run after each new message.
+    We do NOT reset st.session_state for that key, to avoid 'cannot be modified' error.
     """
     ensure_conversation_state(key)
 
-    # Display existing conversation
-    for idx, msg in enumerate(st.session_state.conversation_states[key]):
+    # Show existing conversation
+    for msg in st.session_state.conversation_states[key]:
         if msg["role"] == "user":
-            st.markdown(f"**User:** {msg['content']}")
+            with st.chat_message("user"):
+                st.write(msg["content"])
         else:
-            st.markdown(f"**Assistant:** {msg['content']}")
+            with st.chat_message("assistant"):
+                st.write(msg["content"])
 
-    # Input for user message
-    user_message = st.text_input("Your message:", key=f"user_input_{key}")
-    if st.button("Send", key=f"send_{key}"):
-        if user_message.strip():
-            # Add user message to conversation
-            st.session_state.conversation_states[key].append(
-                {"role": "user", "content": user_message.strip()}
-            )
-
-            # Prepare entire conversation for LLM
-            conversation = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a helpful assistant. "
-                        "You have the following content:\n\n"
-                        + base_content
-                        + "\n\nUser and assistant messages follow. "
-                        "Answer user queries helpfully."
-                    ),
-                }
-            ]
-            conversation += st.session_state.conversation_states[key]
-            
-            # Call the LLM
-            response = run_completion(conversation, model, verbose)
-            st.session_state.conversation_states[key].append(
-                {"role": "assistant", "content": response}
-            )
-            # Clear the user input field
-            st.session_state[f"user_input_{key}"] = ""
+    # We store chat_input in a local variable (not forcibly clearing it).
+    user_prompt = st.chat_input("Ask a question or refine this content further", key=f"chat_input_{key}")
+    if user_prompt:
+        # Add user message
+        st.session_state.conversation_states[key].append(
+            {"role": "user", "content": user_prompt}
+        )
+        # Build prompt
+        conv_msgs = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a helpful assistant. "
+                    f"Here is some base content:\n\n{base_content}\n\n"
+                    "User messages and assistant responses follow."
+                )
+            }
+        ]
+        conv_msgs.extend(st.session_state.conversation_states[key])
+        # Run LLM
+        response = run_completion(conv_msgs, model, verbose)
+        st.session_state.conversation_states[key].append(
+            {"role": "assistant", "content": response}
+        )
+        # Trigger script re-run (conversation remains in st.session_state)
+        st.experimental_rerun()
 
 def download_expander_content(label, content):
-    """Helper to download the current expander's content as markdown."""
     return st.download_button(
         label="Download contents as markdown",
         data=content.encode("utf-8"),
         file_name=f"{label.replace(' ','_')}.md",
-        mime="text/markdown",
+        mime="text/markdown"
     )
 
 ########################################
-# FILE UPLOAD AND LLM SELECTION
+# PDF UPLOAD & MODEL SELECT
 ########################################
 
 pdf_file = st.file_uploader("Upload PDF", type=["pdf"])
@@ -362,7 +357,6 @@ if pdf_file is not None:
         pdf_text += page.extract_text() + "\n"
 
 llm_options = ["gpt-4o", "o1-mini", "o1-2024-12-17", "anthropic:claude"]
-
 summarizer_model = st.selectbox("Summarizer Model:", llm_options, index=0)
 ideator_model = st.selectbox("Ideator Model:", llm_options, index=0)
 critic_model = st.selectbox("Critic Model:", llm_options, index=0)
@@ -370,9 +364,7 @@ terminator_model = st.selectbox("Terminator Model:", llm_options, index=0)
 
 verbose = st.checkbox("Show verbose debug info")
 
-max_iterations = st.number_input(
-    "Max Refinement Iterations (Auto Mode):", min_value=1, value=3
-)
+max_iterations = st.number_input("Max Refinement Iterations (Auto Mode):", min_value=1, value=3)
 enable_different_angle = st.checkbox("Attempt Different Angle if stuck? (Auto Mode)", value=False)
 
 user_text = st.text_area("Paste your research text (abstract or section):", height=300)
@@ -383,13 +375,13 @@ process_mode = st.radio("Process Mode:", ["Automatic", "Manual"], index=0)
 run_pipeline = st.button("Run Pipeline")
 
 ########################################
-# MANUAL MODE STEP FUNCTIONS
+# MANUAL-MODE STEP FUNCTIONS
 ########################################
 
 def manual_summarize():
     final_input_text = pdf_text.strip() if pdf_text.strip() else user_text.strip()
     if not final_input_text:
-        st.warning("No text to summarize.")
+        st.warning("No text provided.")
         return
     out = summarize_text(final_input_text, summarizer_model, verbose)
     st.session_state.pipeline_results["overview"] = out
@@ -410,7 +402,7 @@ def manual_ideate():
 
 def manual_critique():
     if "initial_ideas" not in st.session_state.pipeline_results:
-        st.warning("No ideas to critique. Ideate first.")
+        st.warning("No ideas to critique.")
         return
     out = critique(st.session_state.pipeline_results["initial_ideas"], critic_model, verbose)
     st.session_state.pipeline_results["critique_text"] = out
@@ -418,7 +410,7 @@ def manual_critique():
 
 def manual_re_ideate():
     if "critique_text" not in st.session_state.pipeline_results:
-        st.warning("No critique to refine from. Critique first.")
+        st.warning("No critique to refine from.")
         return
     refinement_output = re_ideate(
         st.session_state.pipeline_results["initial_ideas"],
@@ -426,17 +418,21 @@ def manual_re_ideate():
         ideator_model,
         verbose
     )
-    critique_section, improved_ideas = parse_refinement_output(refinement_output)
+    cs, improved = parse_refinement_output(refinement_output)
     st.session_state.pipeline_results["refinement_output"] = refinement_output
-    st.session_state.pipeline_results["critique_section"] = critique_section
-    st.session_state.pipeline_results["improved_ideas"] = improved_ideas
+    st.session_state.pipeline_results["critique_section"] = cs
+    st.session_state.pipeline_results["improved_ideas"] = improved
     st.session_state.manual_step = "refined"
 
 def manual_terminate():
     if "improved_ideas" not in st.session_state.pipeline_results:
         st.warning("No improved ideas to evaluate.")
         return
-    verdict = check_termination(st.session_state.pipeline_results["improved_ideas"], terminator_model, verbose)
+    verdict = check_termination(
+        st.session_state.pipeline_results["improved_ideas"], 
+        terminator_model, 
+        verbose
+    )
     st.session_state.pipeline_results["verdict"] = verdict
     if verdict.startswith("Good enough"):
         st.session_state.manual_step = "approved"
@@ -447,31 +443,32 @@ def manual_assess():
     if "improved_ideas" not in st.session_state.pipeline_results:
         st.warning("No final ideas to assess.")
         return
-    out = assess_strengths_weaknesses(st.session_state.pipeline_results["improved_ideas"], terminator_model, verbose)
+    out = assess_strengths_weaknesses(
+        st.session_state.pipeline_results["improved_ideas"], 
+        terminator_model, 
+        verbose
+    )
     st.session_state.pipeline_results["assessment"] = out
     st.session_state.manual_step = "assessed"
 
 ########################################
-# MAIN LOGIC
+# PIPELINE LOGIC
 ########################################
 
 if run_pipeline:
+    # Only once per session:
     if not st.session_state.pipeline_ran:
-        # Only reset pipeline outputs on first run in this session
+        # Clear pipeline outputs
         st.session_state.pipeline_results.clear()
         st.session_state.manual_step = "started"
         st.session_state.pipeline_ran = True
 
     if process_mode == "Automatic":
-        # Automatic pipeline
         final_input_text = pdf_text.strip() if pdf_text.strip() else user_text.strip()
-
         if not final_input_text:
-            st.warning("Please provide text or upload a PDF before running the pipeline.")
+            st.warning("Please provide text or upload a PDF.")
         else:
-            # Summarize
             overview = summarize_text(final_input_text, summarizer_model, verbose)
-            # Ideate
             initial_ideas = ideate(overview, additional_context, ideator_model, verbose)
 
             iteration_count = 0
@@ -479,7 +476,6 @@ if run_pipeline:
             current_ideas = initial_ideas
             iteration_data = []
 
-            # Refinement loop
             while iteration_count < max_iterations:
                 critique_text = critique(current_ideas, critic_model, verbose)
                 refinement_output = re_ideate(current_ideas, critique_text, ideator_model, verbose)
@@ -496,14 +492,12 @@ if run_pipeline:
                     current_ideas = improved_ideas
                     iteration_count += 1
 
-            # If still not good enough after max_iterations
             if not final_good_enough:
                 assessment = assess_strengths_weaknesses(current_ideas, terminator_model, verbose)
                 st.session_state.pipeline_results["assessment"] = assessment
             else:
                 st.session_state.pipeline_results["assessment"] = None
 
-            # Store results
             st.session_state.pipeline_results["overview"] = overview
             st.session_state.pipeline_results["initial_ideas"] = initial_ideas
             st.session_state.pipeline_results["iteration_data"] = iteration_data
@@ -516,7 +510,7 @@ if run_pipeline:
 ########################################
 
 if process_mode == "Manual" and st.session_state.pipeline_ran:
-    # Step 1: Summarize
+    # Step 1
     if st.session_state.manual_step in ["started", "not_started"]:
         st.subheader("Manual Step 1: Summarize")
         if st.button("Run Summarizer"):
@@ -535,11 +529,11 @@ if process_mode == "Manual" and st.session_state.pipeline_ran:
 
         if st.button("Next Step", key="summarizer_next"):
             if "overview" not in st.session_state.pipeline_results:
-                st.warning("No summary found. Summarize first.")
+                st.warning("No summary found.")
             else:
                 st.session_state.manual_step = "summarized"
 
-    # Step 2: Ideate
+    # Step 2
     if st.session_state.manual_step == "summarized":
         st.subheader("Manual Step 2: Ideate")
         if st.button("Run Ideator"):
@@ -558,11 +552,11 @@ if process_mode == "Manual" and st.session_state.pipeline_ran:
 
         if st.button("Next Step", key="ideator_next"):
             if "initial_ideas" not in st.session_state.pipeline_results:
-                st.warning("No ideas found. Please run ideation first.")
+                st.warning("No ideas found.")
             else:
                 st.session_state.manual_step = "ideated"
 
-    # Step 3: Critique
+    # Step 3
     if st.session_state.manual_step == "ideated":
         st.subheader("Manual Step 3: Critique")
         if st.button("Run Critique"):
@@ -581,11 +575,11 @@ if process_mode == "Manual" and st.session_state.pipeline_ran:
 
         if st.button("Next Step", key="critique_next"):
             if "critique_text" not in st.session_state.pipeline_results:
-                st.warning("No critique found. Please run critique first.")
+                st.warning("No critique found.")
             else:
                 st.session_state.manual_step = "critiqued"
 
-    # Step 4: Re-Ideate (Refinement)
+    # Step 4
     if st.session_state.manual_step == "critiqued":
         st.subheader("Manual Step 4: Re-Ideate (Refine Ideas)")
         if st.button("Run Re-Ideation"):
@@ -595,20 +589,22 @@ if process_mode == "Manual" and st.session_state.pipeline_ran:
             with st.expander("Refinement Output"):
                 st.write(st.session_state.pipeline_results["refinement_output"])
                 download_expander_content(
-                    "iteration_refinement_output", 
+                    "iteration_refinement_output",
                     st.session_state.pipeline_results["refinement_output"]
                 )
+
             with st.expander("Extracted CRITIQUE_START/END"):
                 st.write(st.session_state.pipeline_results["critique_section"])
                 download_expander_content(
-                    "iteration_internal_reasoning", 
+                    "iteration_internal_reasoning",
                     st.session_state.pipeline_results["critique_section"]
                 )
+
             if "improved_ideas" in st.session_state.pipeline_results:
                 with st.expander("Refined Directions"):
                     st.write(st.session_state.pipeline_results["improved_ideas"])
                     download_expander_content(
-                        "iteration_refined_directions", 
+                        "iteration_refined_directions",
                         st.session_state.pipeline_results["improved_ideas"]
                     )
                     chat_interface(
@@ -620,11 +616,11 @@ if process_mode == "Manual" and st.session_state.pipeline_ran:
 
         if st.button("Next Step", key="refine_next"):
             if "improved_ideas" not in st.session_state.pipeline_results:
-                st.warning("No refined ideas found. Please run re-ideation first.")
+                st.warning("No refined ideas found.")
             else:
                 st.session_state.manual_step = "refined"
 
-    # Step 5: Terminator Check
+    # Step 5
     if st.session_state.manual_step == "refined":
         st.subheader("Manual Step 5: Terminator Check")
         if st.button("Run Terminator Check"):
@@ -635,7 +631,7 @@ if process_mode == "Manual" and st.session_state.pipeline_ran:
 
         if st.button("Next Step", key="terminate_next"):
             if "verdict" not in st.session_state.pipeline_results:
-                st.warning("No verdict found. Please run terminator check first.")
+                st.warning("No verdict found.")
             else:
                 if st.session_state.pipeline_results["verdict"].startswith("Good enough"):
                     st.session_state.manual_step = "approved"
@@ -645,15 +641,20 @@ if process_mode == "Manual" and st.session_state.pipeline_ran:
     # If approved
     if st.session_state.manual_step == "approved":
         st.subheader("Final Accepted Ideas")
-        final_ideas = st.session_state.pipeline_results.get("improved_ideas", "No ideas found.")
+        final_ideas = st.session_state.pipeline_results.get("improved_ideas", "")
         st.write(final_ideas)
         download_expander_content("final_accepted_ideas", final_ideas)
-        chat_interface("final_accepted_ideas", final_ideas, ideator_model, verbose)
+        chat_interface(
+            key="final_accepted_ideas",
+            base_content=final_ideas,
+            model=ideator_model,
+            verbose=verbose
+        )
         st.success("Pipeline complete. Ideas were approved by the Terminator.")
 
-    # If needed more iteration
+    # If needs iteration
     if st.session_state.manual_step == "needs_iteration":
-        st.warning("Terminator said more iteration is needed. You can refine further or assess strengths & weaknesses.")
+        st.warning("Terminator said more iteration is needed. Refine further or do a Strengths & Weaknesses assessment.")
         if st.button("Run Strengths & Weaknesses Assessment"):
             manual_assess()
 
@@ -663,11 +664,16 @@ if process_mode == "Manual" and st.session_state.pipeline_ran:
         assessment = st.session_state.pipeline_results.get("assessment", "")
         st.write(assessment)
         download_expander_content("strengths_weaknesses_assessment", assessment)
-        chat_interface("strengths_weaknesses_assessment", assessment, ideator_model, verbose)
-        st.info("End of pipeline in manual mode. You can refine or conclude here.")
+        chat_interface(
+            key="strengths_weaknesses_assessment",
+            base_content=assessment,
+            model=ideator_model,
+            verbose=verbose
+        )
+        st.info("End of pipeline in manual mode. You may refine or stop here.")
 
 ########################################
-# AUTOMATIC MODE RESULTS DISPLAY
+# AUTOMATIC MODE DISPLAY
 ########################################
 
 if process_mode == "Automatic" and st.session_state.pipeline_ran:
@@ -677,7 +683,6 @@ if process_mode == "Automatic" and st.session_state.pipeline_ran:
     final_good_enough = st.session_state.pipeline_results.get("final_good_enough", False)
     final_ideas = st.session_state.pipeline_results.get("final_ideas", "")
     assessment = st.session_state.pipeline_results.get("assessment", None)
-    additional_context = st.session_state.pipeline_results.get("additional_context", "")
 
     with st.expander("Comprehensive Systematic Overview"):
         st.write(overview)
@@ -713,14 +718,13 @@ if process_mode == "Automatic" and st.session_state.pipeline_ran:
             download_expander_content("final_accepted_ideas", final_ideas)
             chat_interface("final_accepted_ideas", final_ideas, ideator_model, verbose)
     else:
-        if final_ideas:
-            st.warning("Not approved after max iterations. Displaying final output plus strengths & weaknesses.")
-            with st.expander("Final Non-Approved Ideas"):
-                st.write(final_ideas)
-                download_expander_content("final_non_approved_ideas", final_ideas)
-                chat_interface("final_non_approved_ideas", final_ideas, ideator_model, verbose)
+        st.warning("Not approved after max iterations. Showing final output + strengths & weaknesses.")
+        with st.expander("Final Non-Approved Ideas"):
+            st.write(final_ideas)
+            download_expander_content("final_non_approved_ideas", final_ideas)
+            chat_interface("final_non_approved_ideas", final_ideas, ideator_model, verbose)
 
-        if assessment is not None:
+        if assessment:
             with st.expander("Strengths & Weaknesses Assessment", expanded=True):
                 st.write(assessment)
                 download_expander_content("strengths_weaknesses_assessment", assessment)
