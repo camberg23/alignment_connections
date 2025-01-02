@@ -28,7 +28,7 @@ st.write(
     "In 'Automatic' mode, the entire pipeline runs end-to-end at once."
 )
 
-# Session state initialization
+# Session state
 if "pipeline_ran" not in st.session_state:
     st.session_state.pipeline_ran = False
 if "manual_step" not in st.session_state:
@@ -287,7 +287,7 @@ def parse_refinement_output(refinement_output):
     return critique_section, final_refined_ideas
 
 ########################################
-# CHAT WITHIN EXPANDERS
+# "CHAT" WITHIN EXPANDERS (WITHOUT st.chat_input)
 ########################################
 
 def ensure_conversation_state(key):
@@ -297,45 +297,49 @@ def ensure_conversation_state(key):
 
 def chat_interface(key, base_content, model, verbose=False):
     """
-    A chat interface for refining or asking questions about the base_content.
-    Preserves conversation across re-runs via session_state.
+    A minimal chat-like interface with text_input + "Send" button,
+    preserving conversation across re-runs.
     """
     ensure_conversation_state(key)
 
     # Display existing conversation
-    for msg in st.session_state.conversation_states[key]:
+    for idx, msg in enumerate(st.session_state.conversation_states[key]):
         if msg["role"] == "user":
-            with st.chat_message("user"):
-                st.write(msg["content"])
+            st.markdown(f"**User:** {msg['content']}")
         else:
-            with st.chat_message("assistant"):
-                st.write(msg["content"])
+            st.markdown(f"**Assistant:** {msg['content']}")
 
-    # Chat input at the bottom
-    prompt = st.chat_input("Ask a question or refine this content further", key=f"chat_input_{key}")
-    if prompt:
-        # Append user message
-        st.session_state.conversation_states[key].append({"role": "user", "content": prompt})
+    # Input for user message
+    user_message = st.text_input("Your message:", key=f"user_input_{key}")
+    if st.button("Send", key=f"send_{key}"):
+        if user_message.strip():
+            # Add user message to conversation
+            st.session_state.conversation_states[key].append(
+                {"role": "user", "content": user_message.strip()}
+            )
 
-        # Prepare entire conversation
-        conv_messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a helpful assistant. "
-                    "You have the following content:\n\n"
-                    + base_content
-                    + "\n\nUser and assistant messages follow. "
-                    "Answer user queries helpfully."
-                ),
-            }
-        ]
-        for m in st.session_state.conversation_states[key]:
-            conv_messages.append(m)
-
-        response = run_completion(conv_messages, model, verbose=verbose)
-        st.session_state.conversation_states[key].append({"role": "assistant", "content": response})
-        st.rerun()
+            # Prepare entire conversation for LLM
+            conversation = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant. "
+                        "You have the following content:\n\n"
+                        + base_content
+                        + "\n\nUser and assistant messages follow. "
+                        "Answer user queries helpfully."
+                    ),
+                }
+            ]
+            conversation += st.session_state.conversation_states[key]
+            
+            # Call the LLM
+            response = run_completion(conversation, model, verbose)
+            st.session_state.conversation_states[key].append(
+                {"role": "assistant", "content": response}
+            )
+            # Clear the user input field
+            st.session_state[f"user_input_{key}"] = ""
 
 def download_expander_content(label, content):
     """Helper to download the current expander's content as markdown."""
@@ -453,8 +457,8 @@ def manual_assess():
 
 if run_pipeline:
     if not st.session_state.pipeline_ran:
-        # This sets pipeline_ran = True so the pipeline code won't re-reset things on subsequent runs
-        st.session_state.pipeline_results.clear()  # reset pipeline outputs
+        # Only reset pipeline outputs on first run in this session
+        st.session_state.pipeline_results.clear()
         st.session_state.manual_step = "started"
         st.session_state.pipeline_ran = True
 
@@ -506,10 +510,6 @@ if run_pipeline:
             st.session_state.pipeline_results["final_good_enough"] = final_good_enough
             st.session_state.pipeline_results["final_ideas"] = current_ideas
             st.session_state.pipeline_results["additional_context"] = additional_context
-
-    else:
-        # Manual mode: nothing else to do automatically
-        pass
 
 ########################################
 # MANUAL MODE UI
