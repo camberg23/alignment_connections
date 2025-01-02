@@ -335,7 +335,7 @@ def chat_interface(key, base_content, model, verbose=False):
             {"role": "assistant", "content": response}
         )
         # Trigger script re-run (conversation remains in st.session_state)
-        st.experimental_rerun()
+        st.rerun()
 
 def download_expander_content(label, content):
     return st.download_button(
