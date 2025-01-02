@@ -28,15 +28,15 @@ st.write(
     "In 'Automatic' mode, the entire pipeline runs end-to-end at once."
 )
 
-# Session state
+# Session state initialization
 if "pipeline_ran" not in st.session_state:
     st.session_state.pipeline_ran = False
+if "manual_step" not in st.session_state:
+    st.session_state.manual_step = "not_started"
 if "conversation_states" not in st.session_state:
     st.session_state.conversation_states = {}
 if "pipeline_results" not in st.session_state:
     st.session_state.pipeline_results = {}
-if "manual_step" not in st.session_state:
-    st.session_state.manual_step = "not_started"
 
 ########################################
 # SECRETS (UPDATE AS NEEDED)
@@ -338,6 +338,7 @@ def chat_interface(key, base_content, model, verbose=False):
         st.rerun()
 
 def download_expander_content(label, content):
+    """Helper to download the current expander's content as markdown."""
     return st.download_button(
         label="Download contents as markdown",
         data=content.encode("utf-8"),
@@ -451,11 +452,9 @@ def manual_assess():
 ########################################
 
 if run_pipeline:
-    # Only clear states on the FIRST pipeline run in this session
-    # so that subsequent re-runs (like from chat) won't blow away everything.
     if not st.session_state.pipeline_ran:
-        st.session_state.conversation_states.clear()
-        st.session_state.pipeline_results.clear()
+        # This sets pipeline_ran = True so the pipeline code won't re-reset things on subsequent runs
+        st.session_state.pipeline_results.clear()  # reset pipeline outputs
         st.session_state.manual_step = "started"
         st.session_state.pipeline_ran = True
 
@@ -509,7 +508,7 @@ if run_pipeline:
             st.session_state.pipeline_results["additional_context"] = additional_context
 
     else:
-        # Manual mode: we do nothing here except confirm the pipeline has started
+        # Manual mode: nothing else to do automatically
         pass
 
 ########################################
