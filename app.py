@@ -303,7 +303,7 @@ def manual_summarize():
     out = summarize_text(final_text, summarizer_model, verbose)
     st.session_state.pipeline_results["overview"] = out
     st.session_state.manual_step = "summarized"
-    st.experimental_rerun()
+    st.rerun()
 
 def manual_ideate():
     if "overview" not in st.session_state.pipeline_results:
@@ -317,7 +317,7 @@ def manual_ideate():
     )
     st.session_state.pipeline_results["initial_ideas"] = out
     st.session_state.manual_step = "ideated"
-    st.experimental_rerun()
+    st.rerun()
 
 def manual_critique():
     if "initial_ideas" not in st.session_state.pipeline_results:
@@ -326,7 +326,7 @@ def manual_critique():
     out = critique(st.session_state.pipeline_results["initial_ideas"], critic_model, verbose)
     st.session_state.pipeline_results["critique_text"] = out
     st.session_state.manual_step = "critiqued"
-    st.experimental_rerun()
+    st.rerun()
 
 def manual_re_ideate():
     if "critique_text" not in st.session_state.pipeline_results:
@@ -343,7 +343,7 @@ def manual_re_ideate():
     st.session_state.pipeline_results["critique_section"] = c_sec
     st.session_state.pipeline_results["improved_ideas"] = improved
     st.session_state.manual_step = "refined"
-    st.experimental_rerun()
+    st.rerun()
 
 def manual_terminate():
     if "improved_ideas" not in st.session_state.pipeline_results:
@@ -355,7 +355,7 @@ def manual_terminate():
         st.session_state.manual_step = "approved"
     else:
         st.session_state.manual_step = "needs_iteration"
-    st.experimental_rerun()
+    st.rerun()
 
 def manual_assess():
     if "improved_ideas" not in st.session_state.pipeline_results:
@@ -364,7 +364,7 @@ def manual_assess():
     out = assess_strengths_weaknesses(st.session_state.pipeline_results["improved_ideas"], terminator_model, verbose)
     st.session_state.pipeline_results["assessment"] = out
     st.session_state.manual_step = "assessed"
-    st.experimental_rerun()
+    st.rerun()
 
 ###############################################################################
 # MAIN PIPELINE LOGIC
