@@ -494,7 +494,7 @@ if run_pipeline:
             overview = summarize_text(st.session_state.final_input_text, summarizer_model, verbose)
 
             # >>> MINIMAL CHANGE: show the overview expander immediately <<<
-            with st.expander("Comprehensive Systematic Overview (Immediate)", expanded=True):
+            with st.expander("Comprehensive Systematic Overview", expanded=False):
                 st.write(overview)
                 download_expander_content("overview_immediate", overview)
                 chat_interface("overview_immediate", overview, ideator_model, verbose)
@@ -503,7 +503,7 @@ if run_pipeline:
             initial_ideas = ideate(overview, additional_context, ideator_model, verbose)
 
             # >>> MINIMAL CHANGE: show the initial ideas expander immediately <<<
-            with st.expander("Initial Alignment Ideas (Immediate)", expanded=True):
+            with st.expander("Initial Alignment Ideas", expanded=False):
                 st.write(initial_ideas)
                 download_expander_content("initial_alignment_ideas_immediate", initial_ideas)
                 chat_interface("initial_alignment_ideas_immediate", initial_ideas, ideator_model, verbose)
@@ -519,7 +519,7 @@ if run_pipeline:
                 critique_text = critique(current_ideas, critic_model, verbose)
 
                 # >>> MINIMAL CHANGE: show the critique text immediately <<<
-                with st.expander(f"Iteration {iteration_count+1} Critique (Immediate)", expanded=True):
+                with st.expander(f"Iteration {iteration_count+1} Critique", expanded=False):
                     st.write(critique_text)
                     download_expander_content(f"iteration_{iteration_count+1}_critique_immediate", critique_text)
                     chat_interface(f"iteration_{iteration_count+1}_critique_immediate", critique_text, ideator_model, verbose)
@@ -529,7 +529,7 @@ if run_pipeline:
                 critique_section, improved_ideas = parse_refinement_output(refinement_output)
 
                 # >>> MINIMAL CHANGE: show the refined directions immediately <<<
-                with st.expander(f"Iteration {iteration_count+1} Refined Directions (Immediate)", expanded=True):
+                with st.expander(f"Iteration {iteration_count+1} Refined Directions", expanded=False):
                     st.write(improved_ideas)
                     download_expander_content(f"iteration_{iteration_count+1}_refined_directions_immediate", improved_ideas)
                     chat_interface(f"iteration_{iteration_count+1}_refined_directions_immediate", improved_ideas, ideator_model, verbose)
@@ -685,9 +685,9 @@ if st.session_state.pipeline_ran and st.session_state.manual_mode and st.session
         if not critique_section and not improved_ideas:
             st.info("No re-ideation has been run or stored yet. Possibly click 'Rerun Re-Ideate'.")
         else:
-            with st.expander(f"Iteration {idx} Internal Reasoning (CRITIQUE_START/END)", expanded=False):
-                st.write(critique_section)
-                download_expander_content(f"iteration_{idx}_internal_reasoning", critique_section)
+            # with st.expander(f"Iteration {idx} Internal Reasoning (CRITIQUE_START/END)", expanded=False):
+            #     st.write(critique_section)
+            #     download_expander_content(f"iteration_{idx}_internal_reasoning", critique_section)
 
             with st.expander(f"Iteration {idx} Refined Directions", expanded=False):
                 st.write(improved_ideas)
