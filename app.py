@@ -6,12 +6,12 @@ from openai import OpenAI
 from PyPDF2 import PdfReader
 
 # Initialize instructions
-st.title("Alignment Research Automator")
+st.title("Alignment Research Ideator")
 st.write("This tool takes a research text, summarizes it, proposes alignment research directions, critiques them, and refines them based on termination criteria. The goal is to produce actionable, high-quality alignment research directions.")
-st.write("You can choose different LLMs for each stage (Summarizer, Ideator, Critic, Terminator) and run multiple iterations. If after N iterations it still isn't good enough, final output and a strengths/weaknesses assessment is displayed.")
-st.write("You can upload a PDF or paste text. If both are provided, PDF content takes precedence.")
-st.write("Within each expander, you can chat with an LLM to further explore the displayed content. You can also download the contents of the expander as markdown.")
-st.write("**New**: Choose 'Manual Mode' to manually intervene at each step in the pipeline. You can go back and forth with each step before proceeding. When you press 'Proceed', the next step will automatically run, incorporating the entire conversation from the current step into the next step's prompt. Previous-step conversations remain available in collapsible sections with download buttons.")
+# st.write("You can choose different LLMs for each stage (Summarizer, Ideator, Critic, Terminator) and run multiple iterations. If after N iterations it still isn't good enough, final output and a strengths/weaknesses assessment is displayed.")
+# st.write("You can upload a PDF or paste text. If both are provided, PDF content takes precedence.")
+# st.write("Within each expander, you can chat with an LLM to further explore the displayed content. You can also download the contents of the expander as markdown.")
+# st.write("**New**: Choose 'Manual Mode' to manually intervene at each step in the pipeline. You can go back and forth with each step before proceeding. When you press 'Proceed', the next step will automatically run, incorporating the entire conversation from the current step into the next step's prompt. Previous-step conversations remain available in collapsible sections with download buttons.")
 
 # Ensure session state keys exist
 if "pipeline_ran" not in st.session_state:
