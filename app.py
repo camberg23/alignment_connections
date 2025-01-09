@@ -820,10 +820,10 @@ if st.session_state.pipeline_ran and not st.session_state.manual_mode:
             download_expander_content(f"iteration_{i}_critique", critique_text)
             chat_interface(f"iteration_{i}_critique", critique_text, ideator_model, verbose)
 
-        with st.expander(f"Iteration {i} Internal Reasoning (CRITIQUE_START/END)", expanded=False):
-            st.write(critique_section)
-            download_expander_content(f"iteration_{i}_internal_reasoning", critique_section)
-            chat_interface(f"iteration_{i}_internal_reasoning", critique_section, ideator_model, verbose)
+        # with st.expander(f"Iteration {i} Internal Reasoning (CRITIQUE_START/END)", expanded=False):
+        #     st.write(critique_section)
+        #     download_expander_content(f"iteration_{i}_internal_reasoning", critique_section)
+        #     chat_interface(f"iteration_{i}_internal_reasoning", critique_section, ideator_model, verbose)
 
         with st.expander(f"Iteration {i} Refined Directions", expanded=False):
             st.write(improved_ideas)
